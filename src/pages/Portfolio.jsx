@@ -113,7 +113,7 @@ export default function Portfolio() {
         <div className="bg-bg-surface border border-border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-text-primary mb-3">Allocation Treemap</h2>
           <div className="grid grid-cols-4 gap-1 h-48">
-            {stocks.map((s, i) => {
+            {stocks.map((s) => {
               const area = s.weight;
               const cols = area > 14 ? 2 : 1;
               const rows = area > 10 ? 2 : 1;
