@@ -25,10 +25,9 @@
 // +----------------------------------------------+
 // =============================================================================
 
-import {
-  signals, activePositions, intradayEquity, monitoringKPIs,
-  volatilityMetrics, drawdownMetrics, sectorExposure,
-} from '../data/synthetic';
+import { useState, useEffect } from 'react';
+import * as synthetic from '../data/synthetic';
+import { fetchMonitoring } from '../services/api';
 import SignalBadge from '../components/SignalBadge';
 import KPICard from '../components/KPICard';
 import {
@@ -36,10 +35,25 @@ import {
   BarChart, Bar, Cell,
 } from 'recharts';
 import { Pause, Filter, Radio } from 'lucide-react';
-import { useState } from 'react';
 
 export default function Monitoring() {
   const [selectedSignal, setSelectedSignal] = useState(null);
+  const [live, setLive] = useState(null);
+
+  useEffect(() => {
+    fetchMonitoring().then(setLive).catch(() => {});
+    // Refresh every 60 s
+    const id = setInterval(() => fetchMonitoring().then(setLive).catch(() => {}), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const signals          = live?.signals          ?? synthetic.signals;
+  const activePositions  = live?.activePositions  ?? synthetic.activePositions;
+  const intradayEquity   = live?.intradayEquity   ?? synthetic.intradayEquity;
+  const monitoringKPIs   = live?.monitoringKPIs   ?? synthetic.monitoringKPIs;
+  const volatilityMetrics = live?.volatilityMetrics ?? synthetic.volatilityMetrics;
+  const drawdownMetrics  = live?.drawdownMetrics  ?? synthetic.drawdownMetrics;
+  const sectorExposure   = live?.sectorExposure   ?? synthetic.sectorExposure;
 
   return (
     <div className="space-y-6">

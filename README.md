@@ -1,198 +1,201 @@
-# Regime-Adaptive Quantitative Trading System - Frontend Dashboard
+# Regime-Adaptive Quantitative Trading System
 
-A React-based frontend dashboard for a regime-adaptive quantitative trading platform targeting the top 10 large-cap U.S. stocks.
+A full-stack quantitative trading dashboard for the top 10 large-cap U.S. stocks.
 
-This is a **UI blueprint / design prototype** with placeholder data. All data is synthetic and defined in `src/data/synthetic.js`. The codebase is fully annotated with comments explaining what each section displays, which system component it belongs to, and what real data source should replace the placeholders.
+**Backend** — Python Flask API running a MACD + Bollinger Bands + ATR strategy, Modern Portfolio Theory optimisation, and GPT-powered AI explanations.
+**Frontend** — React 19 + Vite dashboard with four pages: Dashboard, Portfolio, Monitoring, and AI Insights.
 
-## System Components
+---
 
-The trading system has **4 core components**, each mapped to specific pages and sections in the dashboard:
+## Quick Start
 
-| Component | Description | Primary Page | Also Appears On |
-|-----------|-------------|-------------|-----------------|
-| **Algorithmic Trading Strategies** | Generates buy/sell signals using MACD, Bollinger Bands, and ATR. Implements 4 mechanisms: Long Momentum (LM), Short Momentum (SM), Long Reversion (LR), Short Reversion (SR). | `/monitoring` | `/` (signals table) |
-| **Portfolio Optimization** | Allocates capital across stocks using Modern Portfolio Theory to maximize Sharpe ratio. Outputs target weights, efficient frontier, risk contributions. | `/portfolio` | `/` (KPIs, donut chart) |
-| **Real-Time Monitoring** | Tracks live portfolio performance: P&L, equity curve, volatility, drawdowns, sector exposure. | `/monitoring` | `/` (equity curve, KPIs) |
-| **AI-Assisted Explanations** | Uses LLM (Claude API) to explain trades, summarize markets, generate risk alerts, and answer questions via chat. | `/ai-insights` | `/` (alerts feed) |
+### Prerequisites
 
-### Important Distinction
+| Requirement | Version |
+| ----------- | ------- |
+| Python      | 3.11+   |
+| Node.js     | 18+     |
+| npm         | 9+      |
 
-- **Algorithmic Trading** decides *when* to buy/sell (signal generation)
-- **Portfolio Optimization** decides *how much* to allocate (weight distribution)
+---
 
-These are separate components that interact: the optimizer sets target weights, while the trading strategy generates entry/exit signals within those allocations.
+### 1. Clone & install dependencies
+
+```bash
+# Frontend dependencies
+npm install
+
+# Python virtual environment (already created)
+# Activate and install backend dependencies
+source .venv/bin/activate
+python -m pip install flask flask-cors scipy scikit-learn ta openai python-dotenv yfinance numpy pandas
+```
+
+---
+
+### 2. Set up environment variables
+
+Create a `.env` file in the project root:
+
+```
+OPENAI_API='your-openai-api-key-here'
+```
+
+> The AI features (trade explanations, market summary, chat) use **GPT-4o-mini** via the OpenAI API.
+> All other features (strategy, portfolio optimisation, metrics) work without an API key.
+
+---
+
+### 3. Run the backend
+
+```bash
+# From the project root
+PORT=5001 .venv/bin/python backend/app.py
+```
+
+On first start the backend will:
+
+1. Download ~5 years of daily price data for all 10 tickers from Yahoo Finance (~15–30 s)
+2. Compute MACD, Bollinger Bands, and ATR indicators
+3. Run the bar-by-bar strategy simulation
+4. Optimise portfolio weights using Modern Portfolio Theory
+5. Compute all performance metrics
+
+Once you see `=== Data ready ===` in the terminal, the API is serving on `http://localhost:5001`.
+
+**Check status:**
+
+```bash
+curl http://localhost:5001/api/status
+# → {"status":"ready", ...}
+```
+
+---
+
+### 4. Run the frontend
+
+Open a **second terminal**:
+
+```bash
+npm run dev
+```
+
+Frontend starts at `http://localhost:5173`. Vite automatically proxies all `/api/*` calls to the Flask backend.
+
+---
+
+### 5. Open the dashboard
+
+Navigate to **http://localhost:5173** in your browser.
+
+> If the backend is still loading data, the frontend will display synthetic placeholder data and switch to live data automatically once the backend is ready.
+
+---
 
 ## Project Structure
 
 ```
-src/
-  App.jsx                    # Root: BrowserRouter with route definitions
-  main.jsx                   # Entry point: renders App into #root
-  index.css                  # Tailwind v4 import + design system theme colors
-  App.css                    # (empty - all styling via Tailwind)
-
-  components/
-    Layout.jsx               # Global shell: sidebar nav + top bar + content area
-    KPICard.jsx              # Reusable KPI metric card with sparkline
-    SignalBadge.jsx           # Colored pill badge for LONG/SHORT/EXIT/HOLD
-
-  pages/
-    Dashboard.jsx            # Landing page: combined overview of all 4 components
-    Portfolio.jsx            # Portfolio Optimization: weights, frontier, sectors
-    Monitoring.jsx           # Trading + Monitoring: signals, positions, risk
-    AIInsights.jsx           # AI Explanations: trade explainer, summary, alerts, chat
-
-  data/
-    synthetic.js             # All placeholder data with schema documentation
+.
+├── backend/
+│   ├── app.py            # Flask API server (all routes)
+│   ├── trading.py        # MACD-BB-ATR strategy + simulation engine
+│   ├── optimizer.py      # MPT portfolio optimiser (Ledoit-Wolf + tangent portfolio)
+│   ├── performance.py    # Performance metrics (Sharpe, drawdown, CAGR, etc.)
+│   └── ai_service.py     # GPT-powered trade explanations, summary, chat
+│
+├── src/
+│   ├── services/
+│   │   └── api.js        # Frontend API client (fetches from /api/*)
+│   ├── pages/
+│   │   ├── Dashboard.jsx   # Overview: KPIs, equity curve, signals, alerts
+│   │   ├── Portfolio.jsx   # Allocation, efficient frontier, risk contribution
+│   │   ├── Monitoring.jsx  # Live positions, signal feed, drawdown, exposure
+│   │   └── AIInsights.jsx  # Trade explainer, market summary, risk alerts, chat
+│   ├── components/
+│   │   ├── Layout.jsx      # Sidebar + top bar shell
+│   │   ├── KPICard.jsx     # Metric card with sparkline
+│   │   └── SignalBadge.jsx # LONG / SHORT / EXIT badge
+│   └── data/
+│       └── synthetic.js    # Fallback placeholder data (used when backend is offline)
+│
+├── notebook/
+│   └── Group6_FinalTerm.ipynb  # Original research notebook (strategy source)
+│
+├── .env                  # OPENAI_API key (not committed)
+├── vite.config.js        # Vite config with /api proxy → localhost:5001
+└── package.json
 ```
 
-## Page Details
+---
 
-### 1. Dashboard Overview (`/`)
+## API Endpoints
 
-The landing page providing a 30-second snapshot across all 4 components.
+| Method | Path              | Description                                                |
+| ------ | ----------------- | ---------------------------------------------------------- |
+| GET    | `/api/status`     | Backend load state: `loading` / `ready` / `error`          |
+| GET    | `/api/dashboard`  | All data for the Dashboard page                            |
+| GET    | `/api/portfolio`  | Portfolio allocation, efficient frontier, sector breakdown |
+| GET    | `/api/monitoring` | Positions, signals, KPIs, drawdown, sector exposure        |
+| GET    | `/api/alerts`     | AI-generated risk alerts                                   |
+| POST   | `/api/ai/explain` | Explain a trading signal (GPT)                             |
+| POST   | `/api/ai/summary` | Generate market summary (GPT)                              |
+| POST   | `/api/ai/chat`    | Chat with AI assistant (GPT)                               |
+| POST   | `/api/refresh`    | Re-run the backtest and reload all data                    |
 
-| Section | Component | Data Needed |
-|---------|-----------|-------------|
-| KPI: Total Portfolio Value | Portfolio Optimization | `portfolioValue` (number, USD) |
-| KPI: Day P&L | Real-Time Monitoring | `dayPnL` (number, USD), `dayPnLPercent` (number, %) |
-| KPI: Sharpe Ratio | Portfolio Optimization | `sharpeRatio` (number) |
-| KPI: Active Positions | Algorithmic Trading | `positions.long`, `positions.short` (numbers) |
-| Equity Curve | Real-Time Monitoring | `equityCurve[]` array: `{ date, portfolio, benchmark, drawdown }` |
-| Portfolio Donut | Portfolio Optimization | `stocks[]` array: `{ ticker, weight }` |
-| Recent Signals | Algorithmic Trading | `signals[]` array: `{ time, ticker, action, type, strength }` |
-| AI Alerts | AI-Assisted Explanations | `alerts[]` array: `{ severity, time, title, message }` |
+---
 
-### 2. Portfolio Distribution (`/portfolio`)
+## Trading Strategy
 
-Dedicated to the **Portfolio Optimization** component.
+The strategy is extracted from `notebook/Group6_FinalTerm.ipynb` and implements four entry mechanisms:
 
-| Section | Data Needed |
-|---------|-------------|
-| Control Bar | Optimizer strategy list, last run timestamp |
-| Allocation Treemap | `stocks[]`: `{ ticker, weight, sector }` |
-| Efficient Frontier | `efficientFrontier[]`: `{ volatility, return }`, `individualStocks[]`, `currentPortfolio` |
-| Optimization Summary | `sharpeRatio`, expected return %, portfolio vol %, max drawdown % |
-| Allocation Table | `stocks[]`: all fields (ticker, name, weight, value, sector, price, change) |
-| Sector Breakdown | `sectorBreakdown[]`: `{ name, value, color }` |
-| Risk Contribution | `riskContribution[]`: `{ ticker, risk }` (sums to 100%) |
-| Stock Detail Modal | Single stock object with all fields + historical metrics |
+| Code   | Name            | Entry Condition                                 |
+| ------ | --------------- | ----------------------------------------------- |
+| **LM** | Long Momentum   | `0 ≤ MACD_hist ≤ Z_mid` AND `price > BB_mid`    |
+| **SM** | Short Momentum  | `−Z_mid ≤ MACD_hist < 0` AND `price < BB_mid`   |
+| **LR** | Long Reversion  | `MACD_hist < −Z_extreme` AND `price < BB_lower` |
+| **SR** | Short Reversion | `MACD_hist > Z_extreme` AND `price > BB_upper`  |
 
-### 3. Live Monitoring (`/monitoring`)
+Exits are ATR-scaled stop-loss / take-profit with optional trailing stops and a time-based exit.
+`Z_extreme` and `Z_mid` are dynamically scaled using **Robust MAD** of the MACD histogram.
 
-Combines **Algorithmic Trading Strategies** and **Real-Time Monitoring**.
+**Universe:** AAPL, AMZN, META, GOOG, GOOGL, NVDA, MSFT, AVGO, TSLA, BRK-B
+**Benchmark:** SPY (buy-and-hold)
 
-| Section | Component | Data Needed |
-|---------|-----------|-------------|
-| Status Bar | Both | `strategy_status`, `current_regime`, `update_interval` |
-| KPI: Unrealized P&L | Monitoring | `monitoringKPIs.unrealizedPnL` (number, USD) |
-| KPI: Realized P&L | Monitoring | `monitoringKPIs.realizedPnL` (number, USD) |
-| KPI: Win Rate | Monitoring | `monitoringKPIs.winRate` (number, %) |
-| KPI: Net Exposure | Monitoring | `monitoringKPIs.netExposure` (number, %) |
-| Signal Feed | Trading | `signals[]`: `{ time, ticker, action, type, strength, detail }` |
-| Position Tracker | Trading + Monitoring | `activePositions[]`: `{ ticker, direction, entry, current, pnl, pnlPercent, sl, tp }` |
-| Equity Curve (Live) | Monitoring | `intradayEquity[]`: `{ time, value }` |
-| Volatility Monitor | Monitoring | `volatilityMetrics`: `{ atr, vix, portfolioVol }` |
-| Drawdown Tracker | Monitoring | `drawdownMetrics`: `{ current, maxToday, maxEver }` |
-| Sector Exposure | Both | `sectorExposure[]`: `{ sector, exposure }` |
-| Signal Detail Modal | Trading | Single signal object with all fields |
+---
 
-### 4. AI-Assisted Insights (`/ai-insights`)
+## Portfolio Optimisation
 
-Dedicated to the **AI-Assisted Explanations** component. Has 3 tabs + floating chat.
+Uses **Modern Portfolio Theory** (Ledoit-Wolf shrinkage covariance + analytical tangent portfolio) to find the max-Sharpe allocation. The efficient frontier is computed with `scipy` SLSQP.
 
-| Section | Tab | Data Needed |
-|---------|-----|-------------|
-| Trade Selector | Trade Explainer | List of recent signals as dropdown options |
-| AI Explanation Card | Trade Explainer | `{ action, ticker, time, strategy, why[], risk, confidence }` |
-| Trade History | Trade Explainer | `signals[]` with `.detail` field for AI annotations |
-| Regime Indicator | Market Summary | `regime_label`, `regime_direction`, `regime_confidence` |
-| AI Market Summary | Market Summary | AI-generated paragraph (from Claude API) |
-| Key Observations | Market Summary | AI-generated bullet points (from Claude API) |
-| Stock Heatmap | Market Summary | `heatmapData[]`: `{ ticker, change }` |
-| Risk Alerts | Risk Alerts | `alerts[]`: `{ severity, time, title, message, recommendation }` |
-| AI Chat Panel | (floating) | Conversation history `{ role, text }[]`, Claude API integration |
-
-## Data Integration Guide
-
-All placeholder data is in `src/data/synthetic.js`. Each export is documented with:
-- Which **system component** it belongs to
-- Which **page(s)** consume it
-- What **backend source** should provide it
-- The **data shape** with field descriptions
-
-### To replace placeholder data with real sources:
-
-1. **Create API service modules** (e.g., `src/api/portfolio.js`, `src/api/signals.js`)
-2. **Replace imports** in each page from `../data/synthetic` to your API modules
-3. **Use React state/effects** or a state manager (Zustand recommended) to fetch and store data
-4. **For real-time data** (signals, positions, equity), set up WebSocket connections
-5. **For AI features**, integrate the Anthropic SDK (Claude API) with appropriate system prompts
-
-### Signal Type Codes
-
-| Code | Full Name | Description |
-|------|-----------|-------------|
-| `LM` | Long Momentum | Enter long when momentum indicators signal upward trend |
-| `SM` | Short Momentum | Enter short when strong downward momentum detected |
-| `LR` | Long Reversion | Buy when price falls significantly below statistical range |
-| `SR` | Short Reversion | Sell when price moves excessively above equilibrium range |
-| `SL` | Stop-Loss | Exit triggered by stop-loss price hit |
-| `TP` | Take-Profit | Exit triggered by take-profit target reached |
-
-## Design System
-
-### Color Palette
-
-| Token | Hex | Usage |
-|-------|-----|-------|
-| `bg-main` | `#0D1117` | Page background |
-| `bg-surface` | `#161B22` | Cards, panels |
-| `bg-elevated` | `#1C2128` | Modals, dropdowns, hover states |
-| `border` | `#30363D` | All borders |
-| `text-primary` | `#E6EDF3` | Primary text |
-| `text-secondary` | `#8B949E` | Secondary/muted text |
-| `accent` | `#58A6FF` | Links, active states, accent |
-| `profit` | `#3FB950` | Positive P&L, long positions |
-| `loss` | `#F85149` | Negative P&L, short positions |
-| `warning` | `#D29922` | Warning alerts |
-
-### Typography
-
-- **UI text**: Inter (loaded from Google Fonts)
-- **Numbers/code**: JetBrains Mono (loaded from Google Fonts)
-
-## Reusable Components
-
-| Component | File | Props | Used By |
-|-----------|------|-------|---------|
-| `KPICard` | `components/KPICard.jsx` | `label`, `value`, `subtext`, `subtextColor`, `sparklineData` | Dashboard, Monitoring |
-| `SignalBadge` | `components/SignalBadge.jsx` | `action` ('LONG'/'SHORT'/'EXIT'/'HOLD') | Dashboard, Monitoring, AI Insights |
-| `Layout` | `components/Layout.jsx` | (none - wraps all pages) | App.jsx |
+---
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Framework | React 19 + Vite 8 |
-| Styling | Tailwind CSS v4 |
-| Charts | Recharts v3 |
-| Icons | Lucide React |
-| Routing | React Router v7 |
+| Layer                  | Technology                         |
+| ---------------------- | ---------------------------------- |
+| Frontend framework     | React 19 + Vite 8                  |
+| Styling                | Tailwind CSS v4                    |
+| Charts                 | Recharts v3                        |
+| Icons                  | Lucide React                       |
+| Routing                | React Router v7                    |
+| Backend framework      | Flask 3 + flask-cors               |
+| Market data            | yfinance                           |
+| Technical indicators   | ta (TA-Lib wrapper)                |
+| Portfolio optimisation | scipy + scikit-learn (Ledoit-Wolf) |
+| AI features            | OpenAI GPT-4o-mini                 |
 
-## Running Locally
+---
 
-```bash
-npm install
-npm run dev
-```
+## Troubleshooting
 
-The dev server will start at `http://localhost:5173` (or next available port).
+**Port 5000 already in use (macOS)**
+macOS AirPlay Receiver uses port 5000. Use `PORT=5001` as shown above, or disable AirPlay Receiver in System Settings → General → AirDrop & Handoff.
 
-## Next Steps for Integration
+**Backend stuck on "loading"**
+Check logs in the backend terminal. Yahoo Finance rate-limits may slow data downloads. Wait 30–60 seconds.
 
-1. **Backend API**: Build REST/WebSocket endpoints for portfolio data, signals, positions
-2. **State Management**: Add Zustand or React Context for global state
-3. **WebSocket Feed**: Real-time updates for signals, positions, and equity curve
-4. **Claude API**: Integrate Anthropic SDK for trade explanations, market summaries, and chat
-5. **Responsive**: Tablet/mobile layouts (breakpoints defined in design spec)
+**AI features return template responses**
+Ensure `.env` contains a valid `OPENAI_API` key. The key is loaded automatically at backend startup.
+
+**Frontend shows synthetic data**
+The frontend falls back to `src/data/synthetic.js` if the backend is unreachable. Start the Flask server first, then hard-refresh the browser.

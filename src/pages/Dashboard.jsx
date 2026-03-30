@@ -21,21 +21,19 @@
 // +----------------------------------------------+
 // =============================================================================
 
+import { useState, useEffect } from 'react';
 import KPICard from '../components/KPICard';
 import SignalBadge from '../components/SignalBadge';
-import {
-  portfolioValue, dayPnL, dayPnLPercent, mtdPercent, sharpeRatio,
-  positions, equityCurve, stocks, signals, alerts, sparklines,
-} from '../data/synthetic';
+import * as synthetic from '../data/synthetic';
+import { fetchDashboard, fetchStatus, refreshData } from '../services/api';
+
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Area, ComposedChart, Legend,
 } from 'recharts';
-import { TrendingUp, AlertTriangle, Info } from 'lucide-react';
+import { TrendingUp, AlertTriangle, Info, RefreshCw } from 'lucide-react';
 
 const COLORS = ['#58A6FF', '#A371F7', '#3FB950', '#D29922', '#F85149', '#8B949E', '#F778BA', '#79C0FF', '#D2A8FF', '#FFA657'];
-
-const donutData = stocks.map(s => ({ name: s.ticker, value: s.weight }));
 
 const alertIcons = {
   critical: <AlertTriangle size={16} className="text-loss" />,
@@ -50,9 +48,86 @@ const alertBorders = {
 };
 
 export default function Dashboard() {
+  const [live,        setLive]        = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [refreshing,  setRefreshing]  = useState(false);
+
+  const load = () =>
+    fetchDashboard().then(d => { setLive(d); }).catch(() => {});
+
+  // Initial fetch + poll status every 30 s to pick up backend refreshes
+  useEffect(() => {
+    load();
+    fetchStatus().then(s => s.loadedAt && setLastUpdated(new Date(s.loadedAt))).catch(() => {});
+
+    const id = setInterval(() => {
+      fetchStatus().then(s => {
+        if (!s.loadedAt) return;
+        const t = new Date(s.loadedAt);
+        setLastUpdated(prev => {
+          if (!prev || t > prev) { load(); return t; }
+          return prev;
+        });
+      }).catch(() => {});
+    }, 30_000);
+
+    return () => clearInterval(id);
+  }, []); // eslint-disable-line
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    refreshData()
+      .then(() => {
+        // Poll until backend is ready again
+        const poll = setInterval(() => {
+          fetchStatus().then(s => {
+            if (s.status === 'ready') {
+              clearInterval(poll);
+              setRefreshing(false);
+              load();
+              setLastUpdated(new Date(s.loadedAt));
+            }
+          }).catch(() => {});
+        }, 3_000);
+      })
+      .catch(() => setRefreshing(false));
+  };
+
+  // Merge live data with synthetic fallback
+  const portfolioValue  = live?.portfolioValue  ?? synthetic.portfolioValue;
+  const dayPnL          = live?.dayPnL          ?? synthetic.dayPnL;
+  const dayPnLPercent   = live?.dayPnLPercent   ?? synthetic.dayPnLPercent;
+  const mtdPercent      = live?.mtdPercent      ?? synthetic.mtdPercent;
+  const sharpeRatio     = live?.sharpeRatio     ?? synthetic.sharpeRatio;
+  const positions       = live?.positions       ?? synthetic.positions;
+  const equityCurve     = live?.equityCurve     ?? synthetic.equityCurve;
+  const stocks          = live?.stocks          ?? synthetic.stocks;
+  const signals         = live?.signals         ?? synthetic.signals;
+  const alerts          = live?.alerts          ?? synthetic.alerts;
+  const sparklines      = live?.sparklines      ?? synthetic.sparklines;
+
+  const donutData = stocks.map(s => ({ name: s.ticker, value: s.weight }));
+
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-text-primary">Dashboard Overview</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-text-primary">Dashboard Overview</h1>
+        <div className="flex items-center gap-3">
+          {lastUpdated && (
+            <span className="text-text-secondary text-xs">
+              Data as of {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 text-accent text-xs bg-accent/10 px-3 py-1.5 rounded hover:bg-accent/20 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? 'Refreshing…' : 'Refresh Data'}
+          </button>
+        </div>
+      </div>
 
       {/* ================================================================
           ROW 1: KPI CARDS (4 cards in a row)

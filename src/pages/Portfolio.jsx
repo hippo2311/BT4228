@@ -22,16 +22,14 @@
 // +----------------------------------------------+
 // =============================================================================
 
-import {
-  stocks, sectorBreakdown, riskContribution, efficientFrontier,
-  individualStocks, currentPortfolio, portfolioValue,
-} from '../data/synthetic';
+import { useState, useEffect } from 'react';
+import * as synthetic from '../data/synthetic';
+import { fetchPortfolio } from '../services/api';
 import {
   ScatterChart, Scatter, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, BarChart, Bar,
 } from 'recharts';
 import { Play, RotateCcw } from 'lucide-react';
-import { useState } from 'react';
 
 const SECTOR_COLORS = {
   Technology: '#58A6FF',
@@ -43,6 +41,22 @@ const SECTOR_COLORS = {
 
 export default function Portfolio() {
   const [selectedStock, setSelectedStock] = useState(null);
+  const [live, setLive] = useState(null);
+
+  useEffect(() => {
+    fetchPortfolio().then(setLive).catch(() => {});
+  }, []);
+
+  const stocks          = live?.stocks          ?? synthetic.stocks;
+  const sectorBreakdown = live?.sectorBreakdown ?? synthetic.sectorBreakdown;
+  const riskContribution = live?.riskContribution ?? synthetic.riskContribution;
+  const efficientFrontier = live?.efficientFrontier ?? synthetic.efficientFrontier;
+  const individualStocks  = live?.individualStocks  ?? synthetic.individualStocks;
+  const currentPortfolio  = live?.currentPortfolio  ?? synthetic.currentPortfolio;
+  const portfolioValue    = live?.portfolioValue    ?? synthetic.portfolioValue;
+  const optMetrics        = live?.optimizationMetrics ?? {};
+
+  const lastRun = live ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
 
   return (
     <div className="space-y-6">
@@ -78,7 +92,7 @@ export default function Portfolio() {
             <RotateCcw size={14} /> Reset
           </button>
           {/* DATA: {string} last_run_timestamp - from optimizer run history */}
-          <span className="text-text-secondary text-xs">Last run: 10:30 AM</span>
+          <span className="text-text-secondary text-xs">Last run: {lastRun}</span>
         </div>
       </div>
 
@@ -170,10 +184,10 @@ export default function Portfolio() {
           <h2 className="text-sm font-semibold text-text-primary mb-3">Optimization Summary</h2>
           <div className="space-y-4">
             {[
-              { label: 'Target Sharpe', value: '1.84', color: 'text-accent' },
-              { label: 'Expected Return', value: '12.4%', color: 'text-profit' },
-              { label: 'Portfolio Volatility', value: '8.2%', color: 'text-text-primary' },
-              { label: 'Max Drawdown', value: '-6.1%', color: 'text-loss' },
+              { label: 'Target Sharpe',      value: optMetrics.sharpe     != null ? optMetrics.sharpe.toFixed(2)     : '—',                    color: 'text-accent' },
+              { label: 'Expected Return',    value: optMetrics.return     != null ? `${optMetrics.return.toFixed(1)}%`    : `${currentPortfolio.return}%`,   color: 'text-profit' },
+              { label: 'Portfolio Volatility', value: optMetrics.volatility != null ? `${optMetrics.volatility.toFixed(1)}%` : `${currentPortfolio.volatility}%`, color: 'text-text-primary' },
+              { label: 'Max Drawdown',       value: '—',                                                                color: 'text-loss' },
             ].map(item => (
               <div key={item.label} className="flex justify-between items-center">
                 <span className="text-text-secondary text-sm">{item.label}</span>

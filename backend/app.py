@@ -1,0 +1,461 @@
+"""
+Flask API – serves trading system data to the React frontend.
+Run: python backend/app.py
+"""
+
+import os
+import sys
+import json
+import logging
+import threading
+import time
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+# Add backend dir to path
+sys.path.insert(0, os.path.dirname(__file__))
+
+from trading import (TICKERS, COMPANY_NAMES, SECTOR_MAP, SECTOR_COLORS,
+                     DEFAULT_PARAMS, INITIAL_CAPITAL)
+from optimizer import optimize_portfolio
+from performance import compute_metrics, trade_stats, drawdown_series, sparkline_data
+import ai_service
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
+
+# ── In-memory cache ───────────────────────────────────────────────────────────
+
+_cache: dict = {
+    "state":      "loading",   # "loading" | "ready" | "error"
+    "error":      None,
+    "results":    None,
+    "opt":        None,
+    "metrics":    None,
+    "tstats":     None,
+    "loaded_at":  None,
+}
+
+
+# ── Background data loader ────────────────────────────────────────────────────
+
+def _load():
+    try:
+        logger.info("=== Starting full strategy backtest ===")
+        from trading import run_full_strategy
+        results = run_full_strategy()
+        _cache["results"] = results
+
+        logger.info("=== Running portfolio optimiser ===")
+        opt = optimize_portfolio(results["stock_returns"])
+        _cache["opt"] = opt
+
+        logger.info("=== Computing performance metrics ===")
+        metrics = compute_metrics(
+            results["daily_values"],
+            results["initial_capital"],
+            results.get("bench_df"),
+        )
+        tstats  = trade_stats(results["trades"])
+        metrics.update(tstats)
+        _cache["metrics"]   = metrics
+        _cache["tstats"]    = tstats
+        _cache["state"]     = "ready"
+        _cache["loaded_at"] = datetime.now().isoformat()
+        logger.info("=== Data ready ===")
+
+    except Exception as exc:
+        logger.exception("Data load failed")
+        _cache["state"] = "error"
+        _cache["error"] = str(exc)
+
+
+threading.Thread(target=_load, daemon=True).start()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _require_ready():
+    if _cache["state"] != "ready":
+        return jsonify({"status": _cache["state"],
+                        "error":  _cache.get("error")}), 503
+    return None
+
+
+def _format_stocks(opt: dict, current_prices: dict, results: dict) -> list:
+    """Build the stocks[] array the frontend expects."""
+    allocations = opt.get("allocations", {})
+    indiv       = opt.get("individual_metrics", {})
+    corr        = opt.get("corr_to_port", {})
+    total_val   = results["daily_values"][-1]["portfolio"] if results["daily_values"] else INITIAL_CAPITAL
+
+    stocks = []
+    for ticker in TICKERS:
+        if ticker not in allocations:
+            continue
+        w     = allocations[ticker]
+        price = current_prices.get(ticker, {}).get("price", 0)
+        chg   = current_prices.get(ticker, {}).get("change", 0)
+        val   = round(w * total_val, 0)
+        shares = int(val / price) if price > 0 else 0
+
+        # Beta: approximate from stock returns
+        beta = 1.0
+        sr = results["stock_returns"].get(ticker)
+        bench_df = results.get("bench_df")
+        if sr is not None and bench_df is not None and len(bench_df) > 10:
+            br = bench_df["close"].pct_change().dropna()
+            min_len = min(len(sr), len(br))
+            if min_len > 20:
+                cov_m = np.cov(sr.values[-min_len:], br.values[-min_len:])
+                beta  = round(float(cov_m[0, 1] / cov_m[1, 1]), 3) if cov_m[1, 1] > 0 else 1.0
+
+        stocks.append({
+            "ticker":     ticker,
+            "name":       COMPANY_NAMES.get(ticker, ticker),
+            "weight":     round(w * 100, 1),
+            "value":      int(val),
+            "sector":     SECTOR_MAP.get(ticker, "Other"),
+            "shares":     shares,
+            "price":      price,
+            "change":     chg,
+            "beta":       beta,
+            "annReturn":  indiv.get(ticker, {}).get("return", 0),
+            "volatility": indiv.get(ticker, {}).get("volatility", 0),
+            "corrToPort": corr.get(ticker, 0),
+        })
+
+    return sorted(stocks, key=lambda s: s["weight"], reverse=True)
+
+
+def _format_signals(raw_signals: list, n: int = 20) -> list:
+    """Convert simulation signals to frontend shape."""
+    out = []
+    for s in reversed(raw_signals[-n * 3:]):          # recent first
+        out.append({
+            "time":     s.get("time", s.get("date", "")),
+            "ticker":   s["ticker"],
+            "action":   s["action"],
+            "type":     s["type"],
+            "strength": s.get("strength"),
+            "detail":   s.get("detail", ""),
+            "entry_price": s.get("entry_price") or s.get("exit_price"),
+            "tp":  s.get("tp"),
+            "sl":  s.get("sl"),
+            "atr": s.get("atr"),
+            "pnl": s.get("pnl"),
+        })
+        if len(out) >= n:
+            break
+    return out
+
+
+def _format_positions(final_positions: dict, current_prices: dict,
+                       current_atr: dict) -> list:
+    out = []
+    for ticker, pos in final_positions.items():
+        price   = current_prices.get(ticker, {}).get("price", pos["entry_price"])
+        if pos["direction"] == "LONG":
+            pnl     = round((price - pos["entry_price"]) * pos["shares"], 2)
+            pnl_pct = round((price / pos["entry_price"] - 1) * 100, 2)
+        else:
+            pnl     = round((pos["entry_price"] - price) * pos["shares"], 2)
+            pnl_pct = round((1 - price / pos["entry_price"]) * 100, 2)
+
+        out.append({
+            "ticker":    ticker,
+            "direction": pos["direction"],
+            "leg":       pos.get("leg", ""),
+            "entry":     pos["entry_price"],
+            "current":   price,
+            "pnl":       pnl,
+            "pnlPercent": pnl_pct,
+            "sl":        round(pos["sl"], 2),
+            "tp":        round(pos["tp"], 2),
+        })
+    return sorted(out, key=lambda p: abs(p["pnl"]), reverse=True)
+
+
+def _sector_breakdown(stocks: list) -> list:
+    sector_totals: dict[str, float] = {}
+    for s in stocks:
+        sector_totals[s["sector"]] = sector_totals.get(s["sector"], 0) + s["weight"]
+    return [{"name": k, "value": round(v, 1), "color": SECTOR_COLORS.get(k, "#8B949E")}
+            for k, v in sorted(sector_totals.items(), key=lambda x: -x[1])]
+
+
+def _sector_exposure(final_positions: dict, current_prices: dict, total_val: float) -> list:
+    sector_exp: dict[str, float] = {}
+    for ticker, pos in final_positions.items():
+        sector = SECTOR_MAP.get(ticker, "Other")
+        price  = current_prices.get(ticker, {}).get("price", pos["entry_price"])
+        val    = price * pos["shares"] / total_val * 100
+        sign   = 1 if pos["direction"] == "LONG" else -1
+        sector_exp[sector] = sector_exp.get(sector, 0) + sign * val
+
+    return [{"sector": k, "exposure": round(v, 1)}
+            for k, v in sorted(sector_exp.items(), key=lambda x: -abs(x[1]))]
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/api/status")
+def status():
+    return jsonify({
+        "status":    _cache["state"],
+        "error":     _cache.get("error"),
+        "loadedAt":  _cache.get("loaded_at"),
+    })
+
+
+@app.route("/api/dashboard")
+def dashboard():
+    err = _require_ready()
+    if err:
+        return err
+
+    results = _cache["results"]
+    opt     = _cache["opt"]
+    metrics = _cache["metrics"]
+    dv      = results["daily_values"]
+    total   = dv[-1]["portfolio"]
+    prev    = dv[-2]["portfolio"] if len(dv) >= 2 else total
+
+    day_pnl     = round(total - prev, 2)
+    day_pnl_pct = round((total / prev - 1) * 100, 2) if prev > 0 else 0
+
+    signals  = _format_signals(results["signals"], n=10)
+    stocks   = _format_stocks(opt, results["current_prices"], results)
+    sparks   = sparkline_data(dv, results["trades"], n=12)
+
+    # Equity curve: last 90 trading days vs benchmark
+    equity_curve = []
+    for row in dv[-90:]:
+        entry = {
+            "date":      pd.Timestamp(row["date"]).strftime("%b %d"),
+            "portfolio": row["portfolio"],
+        }
+        if "benchmark" in row and row["benchmark"] is not None:
+            entry["benchmark"] = row["benchmark"]
+        else:
+            entry["benchmark"] = row["portfolio"]   # fallback
+
+        # drawdown
+        peak = max(r["portfolio"] for r in dv[:dv.index(row) + 1])
+        entry["drawdown"] = round((row["portfolio"] - peak) / peak * 100, 1)
+        equity_curve.append(entry)
+
+    # Positions summary
+    fp      = results["final_positions"]
+    n_long  = sum(1 for p in fp.values() if p["direction"] == "LONG")
+    n_short = sum(1 for p in fp.values() if p["direction"] == "SHORT")
+
+    alerts = ai_service.generate_alerts(metrics, fp, results["trades"],
+                                        results["current_atr"])
+
+    # Sharpe trend
+    sharpe       = metrics.get("sharpe", 0)
+    roll_sharpe  = metrics.get("rollingSharpe", 0)
+    sharpe_trend = "up" if roll_sharpe >= sharpe * 0.95 else "down"
+
+    return jsonify({
+        "portfolioValue":  round(total, 0),
+        "dayPnL":          day_pnl,
+        "dayPnLPercent":   day_pnl_pct,
+        "mtdPercent":      metrics.get("mtdPct", 0),
+        "sharpeRatio":     sharpe,
+        "sharpeTrend":     sharpe_trend,
+        "positions":       {"long": n_long, "short": n_short},
+        "equityCurve":     equity_curve,
+        "stocks":          stocks,
+        "signals":         signals,
+        "alerts":          alerts,
+        "sparklines":      sparks,
+    })
+
+
+@app.route("/api/portfolio")
+def portfolio():
+    err = _require_ready()
+    if err:
+        return err
+
+    results = _cache["results"]
+    opt     = _cache["opt"]
+    dv      = results["daily_values"]
+
+    stocks         = _format_stocks(opt, results["current_prices"], results)
+    sector_bd      = _sector_breakdown(stocks)
+    risk_contrib   = opt.get("risk_contribution", [])
+    frontier       = opt.get("frontier", [])
+    port_metrics   = opt.get("portfolio_metrics", {})
+    indiv          = opt.get("individual_metrics", {})
+
+    individual_stocks = [
+        {"ticker": t, "volatility": v["volatility"], "return": v["return"]}
+        for t, v in indiv.items()
+    ]
+    current_portfolio = {
+        "volatility": port_metrics.get("volatility", 0),
+        "return":     port_metrics.get("return", 0),
+    }
+
+    total_val = dv[-1]["portfolio"] if dv else INITIAL_CAPITAL
+
+    return jsonify({
+        "portfolioValue":  round(total_val, 0),
+        "stocks":          stocks,
+        "sectorBreakdown": sector_bd,
+        "riskContribution": risk_contrib,
+        "efficientFrontier": frontier,
+        "individualStocks": individual_stocks,
+        "currentPortfolio": current_portfolio,
+        "optimizationMetrics": port_metrics,
+    })
+
+
+@app.route("/api/monitoring")
+def monitoring():
+    err = _require_ready()
+    if err:
+        return err
+
+    results = _cache["results"]
+    metrics = _cache["metrics"]
+    dv      = results["daily_values"]
+    fp      = results["final_positions"]
+    cp      = results["current_prices"]
+    total   = dv[-1]["portfolio"] if dv else INITIAL_CAPITAL
+
+    signals   = _format_signals(results["signals"], n=30)
+    positions = _format_positions(fp, cp, results["current_atr"])
+
+    # Intraday equity: last 30 trading days labelled as time points
+    intraday = [
+        {"time": pd.Timestamp(row["date"]).strftime("%b %d"),
+         "value": row["portfolio"]}
+        for row in dv[-30:]
+    ]
+
+    # Unrealized P&L
+    unrealised = sum(p["pnl"] for p in positions)
+    realised   = metrics.get("realizedPnL", 0)
+    win_rate   = metrics.get("winRate", 0)
+
+    # Net exposure
+    long_val  = sum(cp.get(t, {}).get("price", 0) * pos["shares"]
+                    for t, pos in fp.items() if pos["direction"] == "LONG")
+    short_val = sum(cp.get(t, {}).get("price", 0) * pos["shares"]
+                    for t, pos in fp.items() if pos["direction"] == "SHORT")
+    net_exp   = round((long_val - short_val) / total * 100, 1) if total > 0 else 0
+
+    # Volatility metrics
+    port_vol = metrics.get("volatility", 0)
+    avg_atr  = round(sum(results["current_atr"].values()) / max(len(results["current_atr"]), 1), 4)
+
+    # Drawdown
+    dd_m = metrics.get("currentDrawdown", 0)
+    dd_t = metrics.get("maxTodayDrawdown", 0)
+    dd_e = metrics.get("maxDrawdown", 0)
+
+    sector_exp = _sector_exposure(fp, cp, total)
+
+    return jsonify({
+        "intradayEquity":  intraday,
+        "activePositions": positions,
+        "signals":         signals,
+        "monitoringKPIs": {
+            "unrealizedPnL": round(unrealised, 2),
+            "realizedPnL":   round(realised, 2),
+            "winRate":       round(win_rate, 1),
+            "netExposure":   net_exp,
+        },
+        "volatilityMetrics": {
+            "atr":          avg_atr,
+            "vix":          None,
+            "portfolioVol": round(port_vol, 2),
+        },
+        "drawdownMetrics": {
+            "current":  round(dd_m, 2),
+            "maxToday": round(dd_t, 2),
+            "maxEver":  round(dd_e, 2),
+        },
+        "sectorExposure": sector_exp,
+    })
+
+
+@app.route("/api/alerts")
+def alerts():
+    err = _require_ready()
+    if err:
+        return err
+
+    results = _cache["results"]
+    metrics = _cache["metrics"]
+    a = ai_service.generate_alerts(
+        metrics, results["final_positions"],
+        results["trades"], results["current_atr"]
+    )
+    return jsonify({"alerts": a})
+
+
+# ── AI routes ─────────────────────────────────────────────────────────────────
+
+@app.route("/api/ai/explain", methods=["POST"])
+def ai_explain():
+    body   = request.get_json(force=True, silent=True) or {}
+    signal = body.get("signal", {})
+    result = ai_service.explain_trade(signal)
+    return jsonify(result)
+
+
+@app.route("/api/ai/summary", methods=["POST"])
+def ai_summary():
+    if _cache["state"] != "ready":
+        return jsonify({"summary": "Data still loading, please try again shortly."}), 200
+
+    metrics  = _cache["metrics"]
+    results  = _cache["results"]
+    tickers  = results.get("tickers", TICKERS)
+    positions = results.get("final_positions", {})
+    summary  = ai_service.market_summary(metrics, positions, tickers)
+    return jsonify({"summary": summary})
+
+
+@app.route("/api/ai/chat", methods=["POST"])
+def ai_chat():
+    body    = request.get_json(force=True, silent=True) or {}
+    message = body.get("message", "")
+    history = body.get("history", [])
+    context = {}
+    if _cache["state"] == "ready":
+        context["metrics"] = _cache.get("metrics", {})
+
+    reply = ai_service.chat_response(message, history, context)
+    return jsonify({"response": reply})
+
+
+@app.route("/api/refresh", methods=["POST"])
+def refresh():
+    if _cache["state"] == "loading":
+        return jsonify({"status": "already loading"}), 200
+    _cache["state"] = "loading"
+    _cache["error"] = None
+    threading.Thread(target=_load, daemon=True).start()
+    return jsonify({"status": "loading"})
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5001))
+    logger.info(f"Starting Flask API on port {port}")
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
