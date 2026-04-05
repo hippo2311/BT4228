@@ -2,8 +2,9 @@
 
 A full-stack quantitative trading dashboard for the top 10 large-cap U.S. stocks.
 
-**Backend** — Python Flask API running a MACD + Bollinger Bands + ATR strategy, Modern Portfolio Theory optimisation, and GPT-powered AI explanations.
-**Frontend** — React 19 + Vite dashboard with four pages: Dashboard, Portfolio, Monitoring, and AI Insights.
+**Backend:** Python Flask API running a MACD + Bollinger Bands + ATR strategy, Modern Portfolio Theory optimisation, and GPT-powered AI explanations.
+
+**Frontend:** — React 19 + Vite dashboard with four pages: Dashboard, Portfolio, Monitoring, and AI Insights.
 
 ---
 
