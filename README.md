@@ -2,13 +2,16 @@
 
 ### Group Details:
 **Group Name:** Traders
+
 **Group Members:**
-Cao Thi Ha Phuong (A0266282Y)
-Ho Xin Yi (A0281754X)
-Koh Swee Hong (A0273207J)
-Lauren Dana Ho Min (A0278037X)
-To Bao Chau (A0276224E)
-Yee Ting Hwei (Axxxxxxxx)
+| Name               | Admin No. |
+| ------------------ | --------- |
+| Cao Thi Ha Phuong  | A0266282Y |
+| Ho Xin Yi          | A0281754X |
+| Koh Swee Hong      | A0273207J |
+| Lauren Dana Ho Min | A0278037X |
+| To Bao Chau        | A0276224E |
+| Yee Ting Hwei      | Axxxxxxxx |
 
 A full-stack quantitative trading dashboard for the top 10 large-cap U.S. stocks.
 
