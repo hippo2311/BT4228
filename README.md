@@ -1,10 +1,9 @@
-# TradeX: Regime-Adaptive Quantitative Trading System
+# TradeX: A Regime-Adaptive Quantitative Trading System
 
-### Group Details:
+## Group Detail:
 **Group Name:** Traders
 
-**Group Members:**
-| Name               | Admin No. |
+| Group Members      | Admin No. |
 | ------------------ | --------- |
 | Cao Thi Ha Phuong  | A0266282Y |
 | Ho Xin Yi          | A0281754X |
