@@ -139,9 +139,6 @@ Navigate to **http://localhost:5173** in your browser.
 │   └── data/
 │       └── synthetic.js    # Fallback placeholder data (used when backend is offline)
 │
-├── notebook/
-│   └── Group6_FinalTerm.ipynb  # Original research notebook (strategy source)
-│
 ├── .env                  # OPENAI_API key (not committed)
 ├── vite.config.js        # Vite config with /api proxy → localhost:5001
 └── package.json
@@ -167,14 +164,16 @@ Navigate to **http://localhost:5173** in your browser.
 
 ## Trading Strategy
 
-The strategy is extracted from `notebook/Group6_FinalTerm.ipynb` and implements four entry mechanisms:
+The strategy implements four entry mechanisms and two exit mechanisms:
 
-| Code   | Name            | Entry Condition                                 |
-| ------ | --------------- | ----------------------------------------------- |
-| **LM** | Long Momentum   | `0 ≤ MACD_hist ≤ Z_mid` AND `price > BB_mid`    |
-| **SM** | Short Momentum  | `−Z_mid ≤ MACD_hist < 0` AND `price < BB_mid`   |
-| **LR** | Long Reversion  | `MACD_hist < −Z_extreme` AND `price < BB_lower` |
-| **SR** | Short Reversion | `MACD_hist > Z_extreme` AND `price > BB_upper`  |
+| Code   | Name            | Condition                                                         |
+| ------ | --------------- | ----------------------------------------------------------------- |
+| **LM** | Long Momentum   | `0 ≤ MACD_hist ≤ Z_mid` AND `price > BB_mid`                     |
+| **SM** | Short Momentum  | `−Z_mid ≤ MACD_hist < 0` AND `price < BB_mid`                    |
+| **LR** | Long Reversion  | `MACD_hist < −Z_extreme` AND `price < BB_lower`                   |
+| **SR** | Short Reversion | `MACD_hist > Z_extreme` AND `price > BB_upper`                    |
+| **SL** | Stop-Loss       | Exit triggered when price hits ATR-scaled stop-loss level         |
+| **TP** | Take-Profit     | Exit triggered when price hits ATR-scaled take-profit target      |
 
 Exits are ATR-scaled stop-loss / take-profit with optional trailing stops and a time-based exit.
 `Z_extreme` and `Z_mid` are dynamically scaled using **Robust MAD** of the MACD histogram.
@@ -274,19 +273,6 @@ The trading system has 4 core components, each mapped to specific pages and sect
 | Stock Heatmap | Market Summary | Active tickers from signals |
 | Risk Alerts | Risk Alerts | `alerts[]`: `{ severity, time, title, message, recommendation }` |
 | AI Chat Panel | (floating) | Conversation history, GPT integration |
-
----
-
-## Signal Type Codes
-
-| Code | Full Name | Description |
-| ---- | --------- | ----------- |
-| **LM** | Long Momentum | Enter long when momentum indicators signal upward trend |
-| **SM** | Short Momentum | Enter short when strong downward momentum detected |
-| **LR** | Long Reversion | Buy when price falls significantly below statistical range |
-| **SR** | Short Reversion | Sell when price moves excessively above equilibrium range |
-| **SL** | Stop-Loss | Exit triggered by stop-loss price hit |
-| **TP** | Take-Profit | Exit triggered by take-profit target reached |
 
 ---
 
