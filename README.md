@@ -294,7 +294,7 @@ The trading system has 4 core components, each mapped to specific pages and sect
 macOS AirPlay Receiver uses port 5000. Use `PORT=5001` as shown above, or disable AirPlay Receiver in System Settings → General → AirDrop & Handoff.
 
 **Backend stuck on "loading"**
-Check logs in the backend terminal. Yahoo Finance rate-limits may slow data downloads. Wait 30–60 seconds.
+Check logs in the backend terminal. Yahoo Finance rate-limits may slow data downloads. Wait 30 - 60 seconds.
 
 **AI features return template responses**
 Ensure `.env` contains a valid `OPENAI_API` key. The key is loaded automatically at backend startup.
