@@ -9,7 +9,7 @@
 | Koh Swee Hong      | A0273207J     |
 | Lauren Dana Ho Min | A0278037X     |
 | To Bao Chau        | A0276224E     |
-| Yee Ting Hwei      | Axxxxxxxx     |
+| Yee Ting Hwei      | A0257085X     |
 
 A full-stack quantitative trading dashboard for the top 10 large-cap U.S. stocks.
 
