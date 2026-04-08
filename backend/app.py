@@ -217,16 +217,44 @@ def _format_signals(raw_signals: list, n: int = 20) -> list:
 
 
 def _format_positions(final_positions: dict, current_prices: dict,
-                       current_atr: dict) -> list:
+                       fees: dict | None = None) -> list:
+    fees = fees or {}
+    commission_per_share = float(fees.get("commissionPerShare", 0.0))
+    min_per_order = float(fees.get("minPerOrder", 0.0))
+    max_pct_trade_value = float(fees.get("maxPctTradeValue", 0.0))
+    sec_sell_rate = float(fees.get("secSellRate", 0.0))
+    finra_taf_per_share = float(fees.get("finraTafPerShare", 0.0))
+    finra_taf_cap = float(fees.get("finraTafCap", 0.0))
+
+    def estimate_order_fees(qty: int, price: float, side: str) -> float:
+        trade_value = qty * price
+        if qty <= 0 or trade_value <= 0:
+            return 0.0
+        commission = qty * commission_per_share
+        commission = max(min_per_order, commission)
+        if max_pct_trade_value > 0:
+            commission = min(commission, trade_value * max_pct_trade_value)
+        regulatory = 0.0
+        if side == "sell":
+            regulatory += trade_value * sec_sell_rate
+            regulatory += min(qty * finra_taf_per_share, finra_taf_cap)
+        return commission + regulatory
+
     out = []
     for ticker, pos in final_positions.items():
         price   = current_prices.get(ticker, {}).get("price", pos["entry_price"])
+        qty = pos["shares"]
+        entry_fees = float(pos.get("entry_fees", 0.0))
         if pos["direction"] == "LONG":
-            pnl     = round((price - pos["entry_price"]) * pos["shares"], 2)
-            pnl_pct = round((price / pos["entry_price"] - 1) * 100, 2)
+            gross_pnl = (price - pos["entry_price"]) * qty
+            exit_fees = estimate_order_fees(qty, price, "sell")
         else:
-            pnl     = round((pos["entry_price"] - price) * pos["shares"], 2)
-            pnl_pct = round((1 - price / pos["entry_price"]) * 100, 2)
+            gross_pnl = (pos["entry_price"] - price) * qty
+            exit_fees = estimate_order_fees(qty, price, "buy")
+
+        pnl = round(gross_pnl - entry_fees - exit_fees, 2)
+        denom = pos["entry_price"] * qty if pos["entry_price"] > 0 else 1.0
+        pnl_pct = round((pnl / denom) * 100, 2)
 
         out.append({
             "ticker":    ticker,
@@ -513,7 +541,7 @@ def monitoring():
     total   = dv[-1]["portfolio"] if dv else INITIAL_CAPITAL
 
     signals   = _format_signals(_window_signals(results), n=30)
-    positions = _format_positions(fp, cp, results["current_atr"])
+    positions = _format_positions(fp, cp, results.get("fees"))
 
     # Monitoring equity history: app window from 2025-01-01 to today
     intraday = [

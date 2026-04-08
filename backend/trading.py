@@ -88,6 +88,12 @@ INITIAL_CAPITAL = 1_000_000
 SIM_START = "2025-01-01"
 WARMUP_DAYS = 150
 BENCHMARK = "SPY"
+IBKR_FIXED_PER_SHARE = 0.005
+IBKR_FIXED_MIN_PER_ORDER = 1.00
+IBKR_FIXED_MAX_PCT = 0.01
+IBKR_SEC_SELL_RATE = 0.0000206
+IBKR_FINRA_TAF_PER_SHARE = 0.000195
+IBKR_FINRA_TAF_CAP = 9.79
 
 
 def _detail_for_signal(leg: str, close: float, hist: float, z_mid: float, z_pos: float,
@@ -134,7 +140,7 @@ class CommonClass:
         end,
         interval,
         capital,
-        transaction_cost,
+        transaction_cost=None,
         allocations=None,
         verbose=False,
         rebalance_freq=None,
@@ -163,7 +169,7 @@ class CommonClass:
             self.allocations = {s: float(v) / total for s, v in allocations.items()}
 
         self.capital = {s: self.initial_capital * self.allocations[s] for s in self.symbols}
-        self.transaction_cost = float(transaction_cost)
+        self.transaction_cost = 0.0 if transaction_cost is None else float(transaction_cost)
         self.verbose = verbose
 
         self.all_data: dict[str, pd.DataFrame] = {}
@@ -182,6 +188,43 @@ class CommonClass:
         self.final_positions: dict[str, dict] = {}
 
         self.prepare_data()
+
+    def _estimate_order_fees(self, qty: int, price: float, side: str) -> dict[str, float]:
+        qty = abs(int(qty))
+        trade_value = qty * float(price)
+        if qty <= 0 or trade_value <= 0:
+            return {"commission": 0.0, "regulatory": 0.0, "total": 0.0}
+
+        commission = qty * IBKR_FIXED_PER_SHARE
+        commission = max(IBKR_FIXED_MIN_PER_ORDER, commission)
+        commission = min(commission, trade_value * IBKR_FIXED_MAX_PCT)
+
+        regulatory = 0.0
+        if side == "sell":
+            sec_fee = trade_value * IBKR_SEC_SELL_RATE
+            finra_taf = min(qty * IBKR_FINRA_TAF_PER_SHARE, IBKR_FINRA_TAF_CAP)
+            regulatory = sec_fee + finra_taf
+
+        total = commission + regulatory
+        return {
+            "commission": float(commission),
+            "regulatory": float(regulatory),
+            "total": float(total),
+        }
+
+    def _max_affordable_buy_qty(self, cash: float, price: float) -> int:
+        if cash <= 0 or price <= 0:
+            return 0
+
+        low, high = 0, int(cash / price)
+        while low < high:
+            mid = (low + high + 1) // 2
+            total_cost = mid * price + self._estimate_order_fees(mid, price, "buy")["total"]
+            if total_cost <= cash:
+                low = mid
+            else:
+                high = mid - 1
+        return low
 
     def prepare_data(self):
         for symbol in self.symbols:
@@ -282,17 +325,17 @@ class CommonClass:
         )
         self.stored_data = pd.concat([self.stored_data, row], ignore_index=True)
 
-    def buy_order(self, bar, symbol, quantity=None, dollar=None):
+    def buy_order(self, bar, symbol, quantity=None, dollar=None, liquidity="taker"):
         date, price = self._get_date_price(bar + 1, "Open", symbol)
         if quantity is None:
             dollar = self.capital[symbol] if dollar is None else dollar
-            cost_per_share = price * (1.0 + self.transaction_cost)
-            base_qty = int(dollar / cost_per_share) if cost_per_share > 0 else 0
+            base_qty = self._max_affordable_buy_qty(float(dollar), price)
         else:
             base_qty = int(quantity)
 
         qty = int(base_qty * (1.0 + max(self.leverage, 0.0)))
-        cost = qty * price * (1.0 + self.transaction_cost)
+        fees = self._estimate_order_fees(qty, price, "buy")
+        cost = qty * price + fees["total"]
 
         if qty <= 0:
             return
@@ -316,7 +359,7 @@ class CommonClass:
             portfolio_value=portfolio_value,
         )
 
-    def sell_order(self, bar, symbol, last=False, quantity=None, dollar=None):
+    def sell_order(self, bar, symbol, last=False, quantity=None, dollar=None, liquidity="taker"):
         if not last:
             date, price = self._get_date_price(bar + 1, "Open", symbol)
             held = self.quantity[symbol]
@@ -331,7 +374,8 @@ class CommonClass:
             if qty <= 0:
                 return
 
-            proceeds = qty * price * (1.0 - self.transaction_cost)
+            fees = self._estimate_order_fees(qty, price, "sell")
+            proceeds = qty * price - fees["total"]
             self.capital[symbol] += proceeds
             self.quantity[symbol] -= qty
             self.trades[symbol] += 1
@@ -343,7 +387,8 @@ class CommonClass:
             if held <= 0:
                 return
             qty = held
-            proceeds = qty * price * (1.0 - self.transaction_cost)
+            fees = self._estimate_order_fees(qty, price, "sell")
+            proceeds = qty * price - fees["total"]
             self.capital[symbol] += proceeds
             self.quantity[symbol] -= qty
             self.trades[symbol] += 1
@@ -361,12 +406,11 @@ class CommonClass:
             portfolio_value=portfolio_value,
         )
 
-    def short_order(self, bar, symbol, quantity=None, dollar=None):
+    def short_order(self, bar, symbol, quantity=None, dollar=None, liquidity="taker"):
         date, price = self._get_date_price(bar + 1, "Open", symbol)
         if quantity is None:
             dollar = self.capital[symbol] if dollar is None else dollar
-            proceeds_per_share = price * (1.0 - self.transaction_cost)
-            base_qty = int(dollar / proceeds_per_share) if proceeds_per_share > 0 else 0
+            base_qty = int(float(dollar) / price) if price > 0 else 0
         else:
             base_qty = int(quantity)
 
@@ -374,7 +418,8 @@ class CommonClass:
         if qty <= 0:
             return
 
-        proceeds = qty * price * (1.0 - self.transaction_cost)
+        fees = self._estimate_order_fees(qty, price, "sell")
+        proceeds = qty * price - fees["total"]
         self.capital[symbol] += proceeds
         self.quantity[symbol] -= qty
         self.trades[symbol] += 1
@@ -392,7 +437,7 @@ class CommonClass:
             portfolio_value=portfolio_value,
         )
 
-    def cover_order(self, bar, symbol, last=False, quantity=None, dollar=None):
+    def cover_order(self, bar, symbol, last=False, quantity=None, dollar=None, liquidity="taker"):
         if not last:
             date, price = self._get_date_price(bar + 1, "Open", symbol)
             held = self.quantity[symbol]
@@ -404,7 +449,7 @@ class CommonClass:
                 qty = (
                     shorted_qty
                     if dollar is None
-                    else min(int(dollar / (price * (1.0 + self.transaction_cost))) if price > 0 else 0, shorted_qty)
+                    else min(self._max_affordable_buy_qty(float(dollar), price), shorted_qty)
                 )
             else:
                 qty = min(int(quantity), shorted_qty)
@@ -412,7 +457,8 @@ class CommonClass:
             if qty <= 0:
                 return
 
-            cost = qty * price * (1.0 + self.transaction_cost)
+            fees = self._estimate_order_fees(qty, price, "buy")
+            cost = qty * price + fees["total"]
             if self.leverage <= 0.0 and cost > self.capital[symbol]:
                 return
 
@@ -427,7 +473,8 @@ class CommonClass:
             if held >= 0:
                 return
             qty = abs(held)
-            cost = qty * price * (1.0 + self.transaction_cost)
+            fees = self._estimate_order_fees(qty, price, "buy")
+            cost = qty * price + fees["total"]
             if self.leverage <= 0.0 and cost > self.capital[symbol]:
                 return
 
@@ -567,18 +614,23 @@ class MACDBBATRStrategy(CommonClass):
             }
         )
 
-    def _record_exit_event(self, symbol, state_row, exit_type, exit_date, exit_price):
+    def _record_exit_event(self, symbol, state_row, exit_type, exit_date, exit_price, exit_liquidity="taker"):
         qty = int(abs(state_row["entry_qty"]))
         if qty <= 0:
             return
 
         direction = "LONG" if state_row["position"] == 1 else "SHORT"
         entry_price = float(state_row["entry_price"])
-        pnl = (
+        gross_pnl = (
             (exit_price - entry_price) * qty
             if direction == "LONG"
             else (entry_price - exit_price) * qty
         )
+        entry_fee = float(state_row.get("entry_fees", 0.0))
+        exit_side = "sell" if direction == "LONG" else "buy"
+        exit_fee_breakdown = self._estimate_order_fees(qty, float(exit_price), exit_side)
+        exit_fee = exit_fee_breakdown["total"]
+        pnl = gross_pnl - entry_fee - exit_fee
         denom = entry_price * qty if entry_price > 0 else 1.0
 
         self.closed_trades.append(
@@ -591,9 +643,15 @@ class MACDBBATRStrategy(CommonClass):
                 "exit_price": round(float(exit_price), 2),
                 "exit_date": pd.Timestamp(exit_date).strftime("%Y-%m-%d"),
                 "exit_type": exit_type,
+                "entry_fee": round(float(entry_fee), 2),
+                "exit_fee": round(float(exit_fee), 2),
+                "fees": round(float(entry_fee + exit_fee), 2),
+                "gross_pnl": round(float(gross_pnl), 2),
                 "pnl": round(float(pnl), 2),
                 "pnl_pct": round(float(pnl / denom * 100), 2),
                 "shares": qty,
+                "commission": round(float(exit_fee_breakdown["commission"]), 2),
+                "regulatory_fee": round(float(exit_fee_breakdown["regulatory"]), 2),
             }
         )
 
@@ -628,6 +686,7 @@ class MACDBBATRStrategy(CommonClass):
                 "sl": float(st["sl_price"]) if np.isfinite(st["sl_price"]) else np.nan,
                 "entry_bar": int(st["entry_bar"]),
                 "entry_date": pd.Timestamp(st["entry_date"]).strftime("%Y-%m-%d") if st["entry_date"] is not None else None,
+                "entry_fees": float(st.get("entry_fees", 0.0)),
             }
         self.final_positions = snapshot
 
@@ -654,6 +713,7 @@ class MACDBBATRStrategy(CommonClass):
                 "entry_date": None,
                 "entry_qty": 0,
                 "entry_bar": -1,
+                "entry_fees": 0.0,
             }
 
         days_since_rebalance = 0
@@ -675,11 +735,11 @@ class MACDBBATRStrategy(CommonClass):
                         continue
 
                     exit_price = float(df["Open"].iloc[bar])
-                    self._record_exit_event(symbol, st, "REBALANCE", cur_date, exit_price)
+                    self._record_exit_event(symbol, st, "REBALANCE", cur_date, exit_price, exit_liquidity="taker")
                     if self.quantity[symbol] > 0:
-                        self.sell_order(bar - 1, symbol, quantity=self.quantity[symbol])
+                        self.sell_order(bar - 1, symbol, quantity=self.quantity[symbol], liquidity="taker")
                     else:
-                        self.cover_order(bar - 1, symbol, quantity=abs(self.quantity[symbol]))
+                        self.cover_order(bar - 1, symbol, quantity=abs(self.quantity[symbol]), liquidity="taker")
 
                 total_cash = sum(self.capital.values())
                 self.rebalance(total_cash)
@@ -701,6 +761,7 @@ class MACDBBATRStrategy(CommonClass):
                             "entry_date": None,
                             "entry_qty": 0,
                             "entry_bar": -1,
+                            "entry_fees": 0.0,
                         }
                     )
                 days_since_rebalance = 0
@@ -779,8 +840,8 @@ class MACDBBATRStrategy(CommonClass):
                             if has_next:
                                 exit_price = float(df["Open"].iloc[bar + 1])
                                 exit_date = df.index[bar + 1]
-                                self.sell_order(bar, symbol)
-                                self._record_exit_event(symbol, st, "TIME", exit_date, exit_price)
+                                self.sell_order(bar, symbol, liquidity="taker")
+                                self._record_exit_event(symbol, st, "TIME", exit_date, exit_price, exit_liquidity="taker")
                                 st.update({
                                     "position": 0,
                                     "tp_price": np.nan,
@@ -793,15 +854,17 @@ class MACDBBATRStrategy(CommonClass):
                                     "entry_date": None,
                                     "entry_qty": 0,
                                     "entry_bar": -1,
+                                    "entry_fees": 0.0,
                                 })
                             continue
                     else:
                         if has_next:
                             exit_type = "SL" if np.isfinite(st["sl_price"]) and close_price < st["sl_price"] else "TP"
+                            exit_liquidity = "maker" if exit_type == "TP" else "taker"
                             exit_price = float(df["Open"].iloc[bar + 1])
                             exit_date = df.index[bar + 1]
-                            self.sell_order(bar, symbol)
-                            self._record_exit_event(symbol, st, exit_type, exit_date, exit_price)
+                            self.sell_order(bar, symbol, liquidity=exit_liquidity)
+                            self._record_exit_event(symbol, st, exit_type, exit_date, exit_price, exit_liquidity=exit_liquidity)
                             st.update({
                                 "position": 0,
                                 "tp_price": np.nan,
@@ -814,6 +877,7 @@ class MACDBBATRStrategy(CommonClass):
                                 "entry_date": None,
                                 "entry_qty": 0,
                                 "entry_bar": -1,
+                                "entry_fees": 0.0,
                             })
                         continue
 
@@ -826,8 +890,8 @@ class MACDBBATRStrategy(CommonClass):
                             if has_next:
                                 exit_price = float(df["Open"].iloc[bar + 1])
                                 exit_date = df.index[bar + 1]
-                                self.cover_order(bar, symbol)
-                                self._record_exit_event(symbol, st, "TIME", exit_date, exit_price)
+                                self.cover_order(bar, symbol, liquidity="taker")
+                                self._record_exit_event(symbol, st, "TIME", exit_date, exit_price, exit_liquidity="taker")
                                 st.update({
                                     "position": 0,
                                     "tp_price": np.nan,
@@ -840,15 +904,17 @@ class MACDBBATRStrategy(CommonClass):
                                     "entry_date": None,
                                     "entry_qty": 0,
                                     "entry_bar": -1,
+                                    "entry_fees": 0.0,
                                 })
                             continue
                     else:
                         if has_next:
                             exit_type = "SL" if np.isfinite(st["sl_price"]) and close_price > st["sl_price"] else "TP"
+                            exit_liquidity = "maker" if exit_type == "TP" else "taker"
                             exit_price = float(df["Open"].iloc[bar + 1])
                             exit_date = df.index[bar + 1]
-                            self.cover_order(bar, symbol)
-                            self._record_exit_event(symbol, st, exit_type, exit_date, exit_price)
+                            self.cover_order(bar, symbol, liquidity=exit_liquidity)
+                            self._record_exit_event(symbol, st, exit_type, exit_date, exit_price, exit_liquidity=exit_liquidity)
                             st.update({
                                 "position": 0,
                                 "tp_price": np.nan,
@@ -861,6 +927,7 @@ class MACDBBATRStrategy(CommonClass):
                                 "entry_date": None,
                                 "entry_qty": 0,
                                 "entry_bar": -1,
+                                "entry_fees": 0.0,
                             })
                         continue
 
@@ -876,10 +943,12 @@ class MACDBBATRStrategy(CommonClass):
 
                     if st["buy_trend_counter"] < 4 and long_momentum and np.isfinite(atr_value):
                         if has_next:
-                            self.buy_order(bar, symbol)
+                            self.buy_order(bar, symbol, liquidity="taker")
                             if self.quantity[symbol] > 0:
                                 actual_entry = float(df["Open"].iloc[bar + 1])
                                 trade_date = df.index[bar + 1]
+                                entry_qty = abs(self.quantity[symbol])
+                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "buy")["total"]
                                 st.update({
                                     "position": 1,
                                     "tp_price": actual_entry + atr_value * float(self.params["tp_mult_lm"]),
@@ -892,8 +961,9 @@ class MACDBBATRStrategy(CommonClass):
                                     "bars_since_long": 0,
                                     "entry_leg": "LM",
                                     "entry_date": trade_date,
-                                    "entry_qty": abs(self.quantity[symbol]),
+                                    "entry_qty": entry_qty,
                                     "entry_bar": bar + 1,
+                                    "entry_fees": entry_fees,
                                 })
                                 self._record_entry_signal(
                                     symbol, "LONG", "LM", trade_date, actual_entry, atr_value,
@@ -904,10 +974,12 @@ class MACDBBATRStrategy(CommonClass):
 
                     if st["sell_trend_counter"] < 4 and short_momentum and np.isfinite(atr_value):
                         if has_next:
-                            self.short_order(bar, symbol)
+                            self.short_order(bar, symbol, liquidity="taker")
                             if self.quantity[symbol] < 0:
                                 actual_entry = float(df["Open"].iloc[bar + 1])
                                 trade_date = df.index[bar + 1]
+                                entry_qty = abs(self.quantity[symbol])
+                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "sell")["total"]
                                 st.update({
                                     "position": -1,
                                     "tp_price": actual_entry - atr_value * float(self.params["tp_mult_sm"]),
@@ -920,8 +992,9 @@ class MACDBBATRStrategy(CommonClass):
                                     "bars_since_short": 0,
                                     "entry_leg": "SM",
                                     "entry_date": trade_date,
-                                    "entry_qty": abs(self.quantity[symbol]),
+                                    "entry_qty": entry_qty,
                                     "entry_bar": bar + 1,
+                                    "entry_fees": entry_fees,
                                 })
                                 self._record_entry_signal(
                                     symbol, "SHORT", "SM", trade_date, actual_entry, atr_value,
@@ -932,10 +1005,12 @@ class MACDBBATRStrategy(CommonClass):
 
                     if st["buy_trend_counter"] > 1 and short_reversion and np.isfinite(atr_value):
                         if has_next:
-                            self.short_order(bar, symbol)
+                            self.short_order(bar, symbol, liquidity="taker")
                             if self.quantity[symbol] < 0:
                                 actual_entry = float(df["Open"].iloc[bar + 1])
                                 trade_date = df.index[bar + 1]
+                                entry_qty = abs(self.quantity[symbol])
+                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "sell")["total"]
                                 st.update({
                                     "position": -1,
                                     "tp_price": actual_entry - atr_value * float(self.params["tp_mult_sr"]),
@@ -947,8 +1022,9 @@ class MACDBBATRStrategy(CommonClass):
                                     "bars_since_short": 0,
                                     "entry_leg": "SR",
                                     "entry_date": trade_date,
-                                    "entry_qty": abs(self.quantity[symbol]),
+                                    "entry_qty": entry_qty,
                                     "entry_bar": bar + 1,
+                                    "entry_fees": entry_fees,
                                 })
                                 self._record_entry_signal(
                                     symbol, "SHORT", "SR", trade_date, actual_entry, atr_value,
@@ -959,10 +1035,12 @@ class MACDBBATRStrategy(CommonClass):
 
                     if long_reversion and np.isfinite(atr_value):
                         if has_next:
-                            self.buy_order(bar, symbol)
+                            self.buy_order(bar, symbol, liquidity="taker")
                             if self.quantity[symbol] > 0:
                                 actual_entry = float(df["Open"].iloc[bar + 1])
                                 trade_date = df.index[bar + 1]
+                                entry_qty = abs(self.quantity[symbol])
+                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "buy")["total"]
                                 st.update({
                                     "position": 1,
                                     "tp_price": actual_entry + atr_value * float(self.params["tp_mult_lr"]),
@@ -975,8 +1053,9 @@ class MACDBBATRStrategy(CommonClass):
                                     "bars_since_long": 0,
                                     "entry_leg": "LR",
                                     "entry_date": trade_date,
-                                    "entry_qty": abs(self.quantity[symbol]),
+                                    "entry_qty": entry_qty,
                                     "entry_bar": bar + 1,
+                                    "entry_fees": entry_fees,
                                 })
                                 self._record_entry_signal(
                                     symbol, "LONG", "LR", trade_date, actual_entry, atr_value,
@@ -1105,6 +1184,15 @@ def run_full_strategy(params: dict | None = None) -> dict:
     latest_deployed = None
     selected_tickers = list(TICKERS)
     allocations = {t: round(1 / len(selected_tickers), 4) for t in selected_tickers}
+    fee_config = {
+        "model": "IBKR Pro Fixed",
+        "commissionPerShare": IBKR_FIXED_PER_SHARE,
+        "minPerOrder": IBKR_FIXED_MIN_PER_ORDER,
+        "maxPctTradeValue": IBKR_FIXED_MAX_PCT,
+        "secSellRate": IBKR_SEC_SELL_RATE,
+        "finraTafPerShare": IBKR_FINRA_TAF_PER_SHARE,
+        "finraTafCap": IBKR_FINRA_TAF_CAP,
+    }
 
     for year, prev_start, prev_end, trade_start, trade_end in _annual_windows(SIM_START, end_date):
         logger.info(
@@ -1120,7 +1208,6 @@ def run_full_strategy(params: dict | None = None) -> dict:
             rebalance_freq=int(params["rebalance_freq"]),
             interval="1d",
             capital=running_capital,
-            transaction_cost=0.0,
             verbose=False,
             leverage=0.0,
         )
@@ -1138,7 +1225,6 @@ def run_full_strategy(params: dict | None = None) -> dict:
             rebalance_freq=int(params["rebalance_freq"]),
             interval="1d",
             capital=running_capital,
-            transaction_cost=0.0,
             allocations=allocations,
             verbose=False,
             leverage=0.0,
@@ -1184,6 +1270,7 @@ def run_full_strategy(params: dict | None = None) -> dict:
         "optimizer_history": latest_universe.stock_equity_history,
         "current_prices": _build_current_prices(latest_deployed.all_data),
         "current_atr": _build_current_atr(latest_deployed.all_data),
+        "fees": fee_config,
         "price_data": latest_deployed.all_data,
         "bench_df": benchmark_series,
         "initial_capital": INITIAL_CAPITAL,

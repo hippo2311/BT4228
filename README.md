@@ -84,6 +84,63 @@ Frontend starts at `http://localhost:5173`. Vite automatically proxies all `/api
 
 ---
 
+## Interactive Brokers Paper Trading
+
+The current project is a research/dashboard app by default. It does **not** place broker orders unless you run the dedicated IBKR bridge script.
+
+Add these variables to `.env`:
+
+```bash
+OPENAI_API='your-openai-api-key-here'
+IBKR_HOST='127.0.0.1'
+IBKR_PORT='7497'
+IBKR_CLIENT_ID='1'
+```
+
+Install the IBKR bridge dependency:
+
+```bash
+source .venv/bin/activate
+python -m pip install ib_insync
+```
+
+Before running the bridge:
+
+1. Start `TWS` or `IB Gateway`
+2. Log in with `Paper Trading`
+3. Enable API access
+4. Use paper port `7497` for TWS, or adjust `IBKR_PORT` if you use IB Gateway
+
+Preview the orders first:
+
+```bash
+.venv/bin/python backend/ibkr_paper.py
+```
+
+Submit to IBKR paper trading:
+
+```bash
+.venv/bin/python backend/ibkr_paper.py --execute --close-extra --allow-short
+```
+
+What the bridge does:
+
+1. Runs the existing walk-forward strategy locally.
+2. Reads `final_positions` and optimizer weights from the strategy output.
+3. Scales target share counts to your current IBKR paper account equity.
+4. Compares those targets against your existing IBKR positions.
+5. Prints the order plan, or submits market orders when `--execute` is present.
+
+Notes:
+
+- Default mode is dry-run only.
+- `--close-extra` closes IBKR positions that are not part of the strategy target.
+- `--allow-short` is required if you want the bridge to send short orders.
+- IBKR requires `TWS` or `IB Gateway` to stay running while the script connects and places orders.
+- IBKR paper data may be delayed unless your account has the required market data entitlements.
+
+---
+
 ### 5. Open the dashboard
 
 Navigate to **http://localhost:5173** in your browser.
