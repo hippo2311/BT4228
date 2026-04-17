@@ -1,9 +1,21 @@
-# Regime-Adaptive Quantitative Trading System
+# TradeX: A Regime-Adaptive Quantitative Trading System
+
+### Done by: Traders
+
+| **Group Members**  | **Admin No.** |
+| ------------------ | ------------- |
+| Cao Thi Ha Phuong  | A0266282Y     |
+| Ho Xin Yi          | A0281754X     |
+| Koh Swee Hong      | A0273207J     |
+| Lauren Dana Ho Min | A0278037X     |
+| To Bao Chau        | A0276224E     |
+| Yee Ting Hwei      | A0257085X     |
 
 A full-stack quantitative trading dashboard for the top 10 large-cap U.S. stocks.
 
-**Backend** — Python Flask API running a MACD + Bollinger Bands + ATR strategy, Modern Portfolio Theory optimisation, and GPT-powered AI explanations.
-**Frontend** — React 19 + Vite dashboard with four pages: Dashboard, Portfolio, Monitoring, and AI Insights.
+**Backend:** Python Flask API running a MACD + Bollinger Bands + ATR strategy, Modern Portfolio Theory optimisation, and GPT-powered AI explanations.
+
+**Frontend:** React 19 + Vite dashboard with four pages: Dashboard, Portfolio, Monitoring, and AI Insights.
 
 ---
 
@@ -21,6 +33,8 @@ A full-stack quantitative trading dashboard for the top 10 large-cap U.S. stocks
 
 ### 1. Clone & install dependencies
 
+#### macOS User:
+
 ```bash
 # Frontend dependencies
 npm install
@@ -28,6 +42,16 @@ npm install
 # Python virtual environment (already created)
 # Activate and install backend dependencies
 source .venv/bin/activate
+python -m pip install flask flask-cors scipy scikit-learn ta openai python-dotenv yfinance numpy pandas
+```
+#### Windows User:
+```bash
+# Frontend dependencies
+npm install
+
+# Python virtual environment (already created)
+# Activate and install backend dependencies
+python -m venv .venv
 python -m pip install flask flask-cors scipy scikit-learn ta openai python-dotenv yfinance numpy pandas
 ```
 
@@ -48,9 +72,17 @@ OPENAI_API='your-openai-api-key-here'
 
 ### 3. Run the backend
 
+#### macOS User:
 ```bash
 # From the project root
 PORT=5001 .venv/bin/python backend/app.py
+```
+
+#### Windows User:
+```bash
+# From the project root
+$env:PORT=5001 
+python backend\app.py
 ```
 
 On first start the backend will:
@@ -76,6 +108,7 @@ curl http://localhost:5001/api/status
 
 Open a **second terminal**:
 
+#### Both macOS and Windows Users:
 ```bash
 npm run dev
 ```
@@ -118,9 +151,6 @@ Navigate to **http://localhost:5173** in your browser.
 │   └── data/
 │       └── synthetic.js    # Fallback placeholder data (used when backend is offline)
 │
-├── notebook/
-│   └── Group6_FinalTerm.ipynb  # Original research notebook (strategy source)
-│
 ├── .env                  # OPENAI_API key (not committed)
 ├── vite.config.js        # Vite config with /api proxy → localhost:5001
 └── package.json
@@ -146,14 +176,16 @@ Navigate to **http://localhost:5173** in your browser.
 
 ## Trading Strategy
 
-The strategy is extracted from `notebook/Group6_FinalTerm.ipynb` and implements four entry mechanisms:
+The strategy implements four entry mechanisms and two exit mechanisms:
 
-| Code   | Name            | Entry Condition                                 |
-| ------ | --------------- | ----------------------------------------------- |
-| **LM** | Long Momentum   | `0 ≤ MACD_hist ≤ Z_mid` AND `price > BB_mid`    |
-| **SM** | Short Momentum  | `−Z_mid ≤ MACD_hist < 0` AND `price < BB_mid`   |
-| **LR** | Long Reversion  | `MACD_hist < −Z_extreme` AND `price < BB_lower` |
-| **SR** | Short Reversion | `MACD_hist > Z_extreme` AND `price > BB_upper`  |
+| Code   | Name            | Condition                                                         |
+| ------ | --------------- | ----------------------------------------------------------------- |
+| **LM** | Long Momentum   | `0 ≤ MACD_hist ≤ Z_mid` AND `price > BB_mid`                     |
+| **SM** | Short Momentum  | `−Z_mid ≤ MACD_hist < 0` AND `price < BB_mid`                    |
+| **LR** | Long Reversion  | `MACD_hist < −Z_extreme` AND `price < BB_lower`                   |
+| **SR** | Short Reversion | `MACD_hist > Z_extreme` AND `price > BB_upper`                    |
+| **SL** | Stop-Loss       | Exit triggered when price hits ATR-scaled stop-loss level         |
+| **TP** | Take-Profit     | Exit triggered when price hits ATR-scaled take-profit target      |
 
 Exits are ATR-scaled stop-loss / take-profit with optional trailing stops and a time-based exit.
 `Z_extreme` and `Z_mid` are dynamically scaled using **Robust MAD** of the MACD histogram.
@@ -256,26 +288,13 @@ The trading system has 4 core components, each mapped to specific pages and sect
 
 ---
 
-## Signal Type Codes
-
-| Code | Full Name | Description |
-| ---- | --------- | ----------- |
-| **LM** | Long Momentum | Enter long when momentum indicators signal upward trend |
-| **SM** | Short Momentum | Enter short when strong downward momentum detected |
-| **LR** | Long Reversion | Buy when price falls significantly below statistical range |
-| **SR** | Short Reversion | Sell when price moves excessively above equilibrium range |
-| **SL** | Stop-Loss | Exit triggered by stop-loss price hit |
-| **TP** | Take-Profit | Exit triggered by take-profit target reached |
-
----
-
 ## Troubleshooting
 
 **Port 5000 already in use (macOS)**
 macOS AirPlay Receiver uses port 5000. Use `PORT=5001` as shown above, or disable AirPlay Receiver in System Settings → General → AirDrop & Handoff.
 
 **Backend stuck on "loading"**
-Check logs in the backend terminal. Yahoo Finance rate-limits may slow data downloads. Wait 30–60 seconds.
+Check logs in the backend terminal. Yahoo Finance rate-limits may slow data downloads. Wait 30 - 60 seconds.
 
 **AI features return template responses**
 Ensure `.env` contains a valid `OPENAI_API` key. The key is loaded automatically at backend startup.
