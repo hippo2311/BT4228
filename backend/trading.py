@@ -88,12 +88,54 @@ INITIAL_CAPITAL = 1_000_000
 SIM_START = "2025-01-01"
 WARMUP_DAYS = 150
 BENCHMARK = "SPY"
+
+# IBKR Pro Fixed pricing for US stocks/ETFs:
+# - Commission: USD 0.005/share, minimum USD 1.00, maximum 1% of trade value
+# - SEC Section 31 fee: time-varying, applied on sells only
+# - FINRA TAF: time-varying, applied on sells only
 IBKR_FIXED_PER_SHARE = 0.005
-IBKR_FIXED_MIN_PER_ORDER = 1.00
+IBKR_FIXED_MIN_PER_ORDER = 1.0
 IBKR_FIXED_MAX_PCT = 0.01
-IBKR_SEC_SELL_RATE = 0.0000206
-IBKR_FINRA_TAF_PER_SHARE = 0.000195
-IBKR_FINRA_TAF_CAP = 9.79
+
+SEC_SELL_RATE_SCHEDULE = (
+    (pd.Timestamp("1900-01-01"), 8.0 / 1_000_000),
+    (pd.Timestamp("2024-05-22"), 27.8 / 1_000_000),
+    (pd.Timestamp("2025-05-14"), 0.0),
+    (pd.Timestamp("2026-04-04"), 20.6 / 1_000_000),
+)
+
+FINRA_TAF_SCHEDULE = (
+    (pd.Timestamp("1900-01-01"), 0.000166, 8.30),
+    (pd.Timestamp("2026-01-01"), 0.000195, 9.79),
+)
+
+
+def _as_timestamp(value) -> pd.Timestamp:
+    if isinstance(value, pd.Timestamp):
+        return value.normalize()
+    return pd.Timestamp(value).normalize()
+
+
+def _sec_sell_rate_for_date(trade_date) -> float:
+    ts = _as_timestamp(trade_date)
+    rate = SEC_SELL_RATE_SCHEDULE[0][1]
+    for effective_date, candidate_rate in SEC_SELL_RATE_SCHEDULE:
+        if ts >= effective_date:
+            rate = candidate_rate
+        else:
+            break
+    return float(rate)
+
+
+def _finra_taf_for_date(trade_date) -> tuple[float, float]:
+    ts = _as_timestamp(trade_date)
+    per_share, cap = FINRA_TAF_SCHEDULE[0][1], FINRA_TAF_SCHEDULE[0][2]
+    for effective_date, candidate_per_share, candidate_cap in FINRA_TAF_SCHEDULE:
+        if ts >= effective_date:
+            per_share, cap = candidate_per_share, candidate_cap
+        else:
+            break
+    return float(per_share), float(cap)
 
 
 def _detail_for_signal(leg: str, close: float, hist: float, z_mid: float, z_pos: float,
@@ -189,7 +231,7 @@ class CommonClass:
 
         self.prepare_data()
 
-    def _estimate_order_fees(self, qty: int, price: float, side: str) -> dict[str, float]:
+    def _estimate_order_fees(self, qty: int, price: float, side: str, trade_date=None) -> dict[str, float]:
         qty = abs(int(qty))
         trade_value = qty * float(price)
         if qty <= 0 or trade_value <= 0:
@@ -201,8 +243,10 @@ class CommonClass:
 
         regulatory = 0.0
         if side == "sell":
-            sec_fee = trade_value * IBKR_SEC_SELL_RATE
-            finra_taf = min(qty * IBKR_FINRA_TAF_PER_SHARE, IBKR_FINRA_TAF_CAP)
+            fee_date = trade_date if trade_date is not None else self.end
+            sec_fee = trade_value * _sec_sell_rate_for_date(fee_date)
+            finra_per_share, finra_cap = _finra_taf_for_date(fee_date)
+            finra_taf = min(qty * finra_per_share, finra_cap)
             regulatory = sec_fee + finra_taf
 
         total = commission + regulatory
@@ -212,14 +256,14 @@ class CommonClass:
             "total": float(total),
         }
 
-    def _max_affordable_buy_qty(self, cash: float, price: float) -> int:
+    def _max_affordable_buy_qty(self, cash: float, price: float, trade_date=None) -> int:
         if cash <= 0 or price <= 0:
             return 0
 
         low, high = 0, int(cash / price)
         while low < high:
             mid = (low + high + 1) // 2
-            total_cost = mid * price + self._estimate_order_fees(mid, price, "buy")["total"]
+            total_cost = mid * price + self._estimate_order_fees(mid, price, "buy", trade_date or self.end)["total"]
             if total_cost <= cash:
                 low = mid
             else:
@@ -329,12 +373,12 @@ class CommonClass:
         date, price = self._get_date_price(bar + 1, "Open", symbol)
         if quantity is None:
             dollar = self.capital[symbol] if dollar is None else dollar
-            base_qty = self._max_affordable_buy_qty(float(dollar), price)
+            base_qty = self._max_affordable_buy_qty(float(dollar), price, date)
         else:
             base_qty = int(quantity)
 
         qty = int(base_qty * (1.0 + max(self.leverage, 0.0)))
-        fees = self._estimate_order_fees(qty, price, "buy")
+        fees = self._estimate_order_fees(qty, price, "buy", date)
         cost = qty * price + fees["total"]
 
         if qty <= 0:
@@ -374,7 +418,7 @@ class CommonClass:
             if qty <= 0:
                 return
 
-            fees = self._estimate_order_fees(qty, price, "sell")
+            fees = self._estimate_order_fees(qty, price, "sell", date)
             proceeds = qty * price - fees["total"]
             self.capital[symbol] += proceeds
             self.quantity[symbol] -= qty
@@ -387,7 +431,7 @@ class CommonClass:
             if held <= 0:
                 return
             qty = held
-            fees = self._estimate_order_fees(qty, price, "sell")
+            fees = self._estimate_order_fees(qty, price, "sell", date)
             proceeds = qty * price - fees["total"]
             self.capital[symbol] += proceeds
             self.quantity[symbol] -= qty
@@ -418,7 +462,7 @@ class CommonClass:
         if qty <= 0:
             return
 
-        fees = self._estimate_order_fees(qty, price, "sell")
+        fees = self._estimate_order_fees(qty, price, "sell", date)
         proceeds = qty * price - fees["total"]
         self.capital[symbol] += proceeds
         self.quantity[symbol] -= qty
@@ -449,7 +493,7 @@ class CommonClass:
                 qty = (
                     shorted_qty
                     if dollar is None
-                    else min(self._max_affordable_buy_qty(float(dollar), price), shorted_qty)
+                    else min(self._max_affordable_buy_qty(float(dollar), price, date), shorted_qty)
                 )
             else:
                 qty = min(int(quantity), shorted_qty)
@@ -457,7 +501,7 @@ class CommonClass:
             if qty <= 0:
                 return
 
-            fees = self._estimate_order_fees(qty, price, "buy")
+            fees = self._estimate_order_fees(qty, price, "buy", date)
             cost = qty * price + fees["total"]
             if self.leverage <= 0.0 and cost > self.capital[symbol]:
                 return
@@ -473,7 +517,7 @@ class CommonClass:
             if held >= 0:
                 return
             qty = abs(held)
-            fees = self._estimate_order_fees(qty, price, "buy")
+            fees = self._estimate_order_fees(qty, price, "buy", date)
             cost = qty * price + fees["total"]
             if self.leverage <= 0.0 and cost > self.capital[symbol]:
                 return
@@ -628,7 +672,7 @@ class MACDBBATRStrategy(CommonClass):
         )
         entry_fee = float(state_row.get("entry_fees", 0.0))
         exit_side = "sell" if direction == "LONG" else "buy"
-        exit_fee_breakdown = self._estimate_order_fees(qty, float(exit_price), exit_side)
+        exit_fee_breakdown = self._estimate_order_fees(qty, float(exit_price), exit_side, exit_date)
         exit_fee = exit_fee_breakdown["total"]
         pnl = gross_pnl - entry_fee - exit_fee
         denom = entry_price * qty if entry_price > 0 else 1.0
@@ -948,7 +992,7 @@ class MACDBBATRStrategy(CommonClass):
                                 actual_entry = float(df["Open"].iloc[bar + 1])
                                 trade_date = df.index[bar + 1]
                                 entry_qty = abs(self.quantity[symbol])
-                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "buy")["total"]
+                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "buy", trade_date)["total"]
                                 st.update({
                                     "position": 1,
                                     "tp_price": actual_entry + atr_value * float(self.params["tp_mult_lm"]),
@@ -979,7 +1023,7 @@ class MACDBBATRStrategy(CommonClass):
                                 actual_entry = float(df["Open"].iloc[bar + 1])
                                 trade_date = df.index[bar + 1]
                                 entry_qty = abs(self.quantity[symbol])
-                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "sell")["total"]
+                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "sell", trade_date)["total"]
                                 st.update({
                                     "position": -1,
                                     "tp_price": actual_entry - atr_value * float(self.params["tp_mult_sm"]),
@@ -1010,7 +1054,7 @@ class MACDBBATRStrategy(CommonClass):
                                 actual_entry = float(df["Open"].iloc[bar + 1])
                                 trade_date = df.index[bar + 1]
                                 entry_qty = abs(self.quantity[symbol])
-                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "sell")["total"]
+                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "sell", trade_date)["total"]
                                 st.update({
                                     "position": -1,
                                     "tp_price": actual_entry - atr_value * float(self.params["tp_mult_sr"]),
@@ -1040,7 +1084,7 @@ class MACDBBATRStrategy(CommonClass):
                                 actual_entry = float(df["Open"].iloc[bar + 1])
                                 trade_date = df.index[bar + 1]
                                 entry_qty = abs(self.quantity[symbol])
-                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "buy")["total"]
+                                entry_fees = self._estimate_order_fees(entry_qty, actual_entry, "buy", trade_date)["total"]
                                 st.update({
                                     "position": 1,
                                     "tp_price": actual_entry + atr_value * float(self.params["tp_mult_lr"]),
@@ -1184,14 +1228,16 @@ def run_full_strategy(params: dict | None = None) -> dict:
     latest_deployed = None
     selected_tickers = list(TICKERS)
     allocations = {t: round(1 / len(selected_tickers), 4) for t in selected_tickers}
+    current_sec_sell_rate = _sec_sell_rate_for_date(end_date)
+    current_finra_taf_per_share, current_finra_taf_cap = _finra_taf_for_date(end_date)
     fee_config = {
         "model": "IBKR Pro Fixed",
         "commissionPerShare": IBKR_FIXED_PER_SHARE,
         "minPerOrder": IBKR_FIXED_MIN_PER_ORDER,
         "maxPctTradeValue": IBKR_FIXED_MAX_PCT,
-        "secSellRate": IBKR_SEC_SELL_RATE,
-        "finraTafPerShare": IBKR_FINRA_TAF_PER_SHARE,
-        "finraTafCap": IBKR_FINRA_TAF_CAP,
+        "secSellRate": current_sec_sell_rate,
+        "finraTafPerShare": current_finra_taf_per_share,
+        "finraTafCap": current_finra_taf_cap,
     }
 
     for year, prev_start, prev_end, trade_start, trade_end in _annual_windows(SIM_START, end_date):
