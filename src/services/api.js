@@ -2,8 +2,20 @@
 // Local development uses /api/* via the Vite proxy.
 // Production can point to a real backend with VITE_API_BASE_URL.
 
+const DEFAULT_PROD_BACKEND = 'https://bt4228.onrender.com/api';
+
+function normalizeBaseUrl(value) {
+  if (!value) return '';
+  const trimmed = value.trim().replace(/\/$/, '');
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+}
+
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL?.trim();
-const BASE = RAW_BASE ? RAW_BASE.replace(/\/$/, '') : '/api';
+const BASE = RAW_BASE
+  ? normalizeBaseUrl(RAW_BASE)
+  : import.meta.env.DEV
+    ? '/api'
+    : DEFAULT_PROD_BACKEND;
 export const LIVE_POLL_MS = 5_000;
 
 async function get(path) {
