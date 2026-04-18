@@ -1,0 +1,11 @@
+flask
+flask-cors
+gunicorn
+numpy
+pandas
+scipy
+scikit-learn
+ta
+openai
+python-dotenv
+yfinance

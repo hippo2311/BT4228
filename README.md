@@ -65,6 +65,12 @@ Create a `.env` file in the project root:
 OPENAI_API='your-openai-api-key-here'
 ```
 
+For frontend production deploys that talk to a separate backend, add:
+
+```
+VITE_API_BASE_URL='https://your-backend-service.onrender.com/api'
+```
+
 > The AI features (trade explanations, market summary, chat) use **GPT-4o-mini** via the OpenAI API.
 > All other features (strategy, portfolio optimisation, metrics) work without an API key.
 
@@ -114,6 +120,40 @@ npm run dev
 ```
 
 Frontend starts at `http://localhost:5173`. Vite automatically proxies all `/api/*` calls to the Flask backend.
+
+---
+
+## Deploy Backend On Render
+
+Create a Render `Web Service` from this repo and use:
+
+```bash
+Build Command: pip install -r requirements.txt
+Start Command: gunicorn --chdir backend app:app --bind 0.0.0.0:$PORT
+```
+
+Set these environment variables in Render:
+
+```bash
+OPENAI_API=your-openai-api-key-here
+OPENAI_MODEL=gpt-4o-mini
+```
+
+Render free web services can sleep after roughly 15 minutes without traffic, so the first request after idle may be slow.
+
+After Render gives you a backend URL like:
+
+```bash
+https://your-service-name.onrender.com
+```
+
+set your frontend environment variable to:
+
+```bash
+VITE_API_BASE_URL=https://your-service-name.onrender.com/api
+```
+
+This prevents the frontend from showing `OFFLINE` in production.
 
 ---
 

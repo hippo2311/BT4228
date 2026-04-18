@@ -1,7 +1,9 @@
 // ── API client for the Flask backend ─────────────────────────────────────────
-// All calls use /api/* which Vite proxies to http://localhost:5000
+// Local development uses /api/* via the Vite proxy.
+// Production can point to a real backend with VITE_API_BASE_URL.
 
-const BASE = '/api';
+const RAW_BASE = import.meta.env.VITE_API_BASE_URL?.trim();
+const BASE = RAW_BASE ? RAW_BASE.replace(/\/$/, '') : '/api';
 export const LIVE_POLL_MS = 5_000;
 
 async function get(path) {
