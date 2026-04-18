@@ -24,6 +24,7 @@ from trading import (TICKERS, COMPANY_NAMES, SECTOR_MAP, SECTOR_COLORS,
                      DEFAULT_PARAMS, INITIAL_CAPITAL)
 from optimizer import optimize_portfolio
 from performance import compute_metrics, trade_stats, drawdown_series, sparkline_data
+from snapshot_cache import read_snapshot, write_snapshot, snapshot_path
 import ai_service
 
 logging.basicConfig(level=logging.INFO,
@@ -59,6 +60,22 @@ _cache: dict = {
     "tstats":     None,
     "loaded_at":  None,
 }
+
+
+def _load_snapshot_into_cache() -> bool:
+    snapshot = read_snapshot()
+    if not snapshot:
+        return False
+
+    _cache["results"] = snapshot.get("results")
+    _cache["opt"] = snapshot.get("opt")
+    _cache["metrics"] = snapshot.get("metrics")
+    _cache["tstats"] = snapshot.get("tstats")
+    _cache["state"] = "ready"
+    _cache["error"] = None
+    _cache["loaded_at"] = snapshot.get("loaded_at")
+    logger.info("Loaded backend snapshot from %s", snapshot_path())
+    return True
 
 
 def _window_daily_values(results: dict) -> list[dict]:
@@ -210,6 +227,14 @@ def _load():
         _cache["tstats"]    = tstats
         _cache["state"]     = "ready"
         _cache["loaded_at"] = datetime.now().isoformat()
+        write_snapshot(
+            results=results,
+            opt=opt,
+            metrics=metrics,
+            tstats=tstats,
+            loaded_at=_cache["loaded_at"],
+        )
+        logger.info("=== Snapshot updated at %s ===", snapshot_path())
         logger.info("=== Data ready ===")
 
     except Exception as exc:
@@ -217,8 +242,8 @@ def _load():
         _cache["state"] = "error"
         _cache["error"] = str(exc)
 
-
-threading.Thread(target=_load, daemon=True).start()
+if not _load_snapshot_into_cache():
+    threading.Thread(target=_load, daemon=True).start()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
