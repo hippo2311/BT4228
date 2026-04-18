@@ -9,6 +9,7 @@ import json
 import logging
 import threading
 import time
+import re
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -29,8 +30,22 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+
+def _allowed_origins():
+    defaults = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        re.compile(r"^https://.*\.vercel\.app$"),
+    ]
+    configured = []
+    raw = os.getenv("FRONTEND_ORIGIN", "").strip()
+    if raw:
+        configured.extend([origin.strip() for origin in raw.split(",") if origin.strip()])
+    return defaults + configured
+
+
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
+CORS(app, resources={r"/api/*": {"origins": _allowed_origins()}})
 APP_START = pd.Timestamp("2025-01-01")
 
 # ── In-memory cache ───────────────────────────────────────────────────────────
