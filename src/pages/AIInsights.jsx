@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import * as synthetic from '../data/synthetic';
-import { fetchAlerts, fetchMonitoring, explainTrade, getMarketSummary, chatMessage } from '../services/api';
+import { fetchAlerts, fetchMonitoring, fetchStatus, explainTrade, getMarketSummary, chatMessage, LIVE_POLL_MS } from '../services/api';
 import SignalBadge from '../components/SignalBadge';
 import { Bot, AlertTriangle, Info, Send, RefreshCw, Loader } from 'lucide-react';
 
@@ -32,8 +32,19 @@ export default function AIInsights() {
   const [alerts,   setAlerts]   = useState(null);
 
   useEffect(() => {
-    fetchMonitoring().then(setMonData).catch(() => {});
-    fetchAlerts().then(d => setAlerts(d.alerts)).catch(() => {});
+    const sync = () => {
+      fetchStatus()
+        .then((status) => {
+          if (status.status !== 'ready') return;
+          fetchMonitoring().then(setMonData).catch(() => {});
+          fetchAlerts().then(d => setAlerts(d.alerts)).catch(() => {});
+        })
+        .catch(() => {});
+    };
+
+    sync();
+    const id = setInterval(sync, LIVE_POLL_MS);
+    return () => clearInterval(id);
   }, []);
 
   const signals      = monData?.signals ?? synthetic.signals;

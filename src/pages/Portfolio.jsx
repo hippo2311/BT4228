@@ -24,7 +24,7 @@
 
 import { useState, useEffect } from 'react';
 import * as synthetic from '../data/synthetic';
-import { fetchPortfolio, fetchStatus } from '../services/api';
+import { fetchPortfolio, fetchStatus, LIVE_POLL_MS } from '../services/api';
 import KPICard from '../components/KPICard';
 import {
   ScatterChart, Scatter, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -62,18 +62,16 @@ export default function Portfolio() {
 
   useEffect(() => {
     const load = () => fetchPortfolio().then(setLive).catch(() => {});
-
-    load();
-
-    const id = setInterval(() => {
+    const sync = () => {
       fetchStatus()
         .then((status) => {
-          if (status.status === 'ready') {
-            load();
-          }
+          if (status.status === 'ready') load();
         })
         .catch(() => {});
-    }, 10_000);
+    };
+
+    sync();
+    const id = setInterval(sync, LIVE_POLL_MS);
 
     return () => clearInterval(id);
   }, []);

@@ -25,7 +25,7 @@ import { useState, useEffect } from 'react';
 import KPICard from '../components/KPICard';
 import SignalBadge from '../components/SignalBadge';
 import * as synthetic from '../data/synthetic';
-import { fetchDashboard, fetchStatus, refreshData } from '../services/api';
+import { fetchDashboard, fetchStatus, refreshData, LIVE_POLL_MS } from '../services/api';
 
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -77,24 +77,19 @@ export default function Dashboard() {
   const load = () =>
     fetchDashboard().then(d => { setLive(d); }).catch(() => {});
 
-  // Initial fetch + poll status every 30 s to pick up backend refreshes
   useEffect(() => {
-    load();
-    fetchStatus().then(s => s.loadedAt && setLastUpdated(new Date(s.loadedAt))).catch(() => {});
-
-    const id = setInterval(() => {
+    const sync = () => {
       fetchStatus().then(s => {
-        if (!s.loadedAt) return;
-        const t = new Date(s.loadedAt);
-        setLastUpdated(prev => {
-          if (!prev || t > prev) { load(); return t; }
-          return prev;
-        });
+        if (s.loadedAt) setLastUpdated(new Date(s.loadedAt));
+        if (s.status === 'ready') load();
       }).catch(() => {});
-    }, 30_000);
+    };
+
+    sync();
+    const id = setInterval(sync, LIVE_POLL_MS);
 
     return () => clearInterval(id);
-  }, []); // eslint-disable-line
+  }, []);
 
   const handleRefresh = () => {
     setRefreshing(true);
@@ -110,7 +105,7 @@ export default function Dashboard() {
               setLastUpdated(new Date(s.loadedAt));
             }
           }).catch(() => {});
-        }, 3_000);
+        }, 1_500);
       })
       .catch(() => setRefreshing(false));
   };

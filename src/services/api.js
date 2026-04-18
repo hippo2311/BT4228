@@ -2,9 +2,13 @@
 // All calls use /api/* which Vite proxies to http://localhost:5000
 
 const BASE = '/api';
+export const LIVE_POLL_MS = 5_000;
 
 async function get(path) {
-  const res = await fetch(BASE + path);
+  const res = await fetch(BASE + path, {
+    cache: 'no-store',
+    headers: { 'Cache-Control': 'no-cache' },
+  });
   if (!res.ok) throw new Error(`API ${path} → ${res.status}`);
   return res.json();
 }
@@ -12,6 +16,7 @@ async function get(path) {
 async function post(path, body) {
   const res = await fetch(BASE + path, {
     method: 'POST',
+    cache: 'no-store',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });

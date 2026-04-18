@@ -24,8 +24,10 @@
 //   [AI] = AI Insights           (/ai-insights)- AI-ASSISTED EXPLANATIONS component
 // =============================================================================
 
+import { createElement, useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, PieChart, Activity, Bot } from 'lucide-react';
+import { fetchStatus, LIVE_POLL_MS } from '../services/api';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -35,6 +37,43 @@ const navItems = [
 ];
 
 export default function Layout() {
+  const [clock, setClock] = useState(() =>
+    new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+  );
+  const [backendStatus, setBackendStatus] = useState('loading');
+
+  useEffect(() => {
+    const tickClock = () => {
+      setClock(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    };
+    tickClock();
+    const clockId = setInterval(tickClock, 1000);
+    return () => clearInterval(clockId);
+  }, []);
+
+  useEffect(() => {
+    const syncStatus = () => {
+      fetchStatus()
+        .then((status) => setBackendStatus(status.status || 'loading'))
+        .catch(() => setBackendStatus('error'));
+    };
+
+    syncStatus();
+    const statusId = setInterval(syncStatus, LIVE_POLL_MS);
+    return () => clearInterval(statusId);
+  }, []);
+
+  const liveTone = backendStatus === 'ready'
+    ? 'bg-profit text-profit'
+    : backendStatus === 'loading'
+      ? 'bg-warning text-warning'
+      : 'bg-loss text-loss';
+  const liveLabel = backendStatus === 'ready'
+    ? 'LIVE'
+    : backendStatus === 'loading'
+      ? 'SYNCING'
+      : 'OFFLINE';
+
   return (
     <div className="flex h-screen overflow-hidden">
 
@@ -44,7 +83,7 @@ export default function Layout() {
           - Active page: blue left accent bar + filled icon
           ================================================================ */}
       <nav className="w-16 bg-bg-surface border-r border-border flex flex-col items-center py-4 gap-2 shrink-0">
-        {navItems.map(({ to, icon: Icon, label }) => (
+        {navItems.map(({ to, icon, label }) => (
           <NavLink
             key={to}
             to={to}
@@ -57,7 +96,7 @@ export default function Layout() {
               }`
             }
           >
-            <Icon size={20} />
+            {createElement(icon, { size: 20 })}
             {/* Tooltip on hover */}
             <span className="absolute left-14 bg-bg-elevated text-text-primary text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
               {label}
@@ -83,16 +122,12 @@ export default function Layout() {
             <span className="font-semibold text-text-primary text-sm">TradeX: A Regime-Adaptive QTS</span>
           </div>
           <div className="flex items-center gap-4">
-            {/* LIVE STATUS INDICATOR
-                TODO: Wire to WebSocket connection status
-                Shows green pulsing dot when connected, red when disconnected */}
             <span className="flex items-center gap-1.5 text-xs">
-              <span className="w-2 h-2 rounded-full bg-profit animate-pulse" />
-              <span className="text-profit font-medium">LIVE</span>
+              <span className={`w-2 h-2 rounded-full ${liveTone.split(' ')[0]} ${backendStatus === 'ready' ? 'animate-pulse' : ''}`} />
+              <span className={`${liveTone.split(' ')[1]} font-medium`}>{liveLabel}</span>
             </span>
-            {/* CLOCK - auto-updates; currently uses client time */}
             <span className="text-text-secondary text-xs font-mono">
-              {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              {clock}
             </span>
           </div>
         </header>

@@ -27,7 +27,7 @@
 
 import { useState, useEffect } from 'react';
 import * as synthetic from '../data/synthetic';
-import { fetchMonitoring } from '../services/api';
+import { fetchMonitoring, fetchStatus, LIVE_POLL_MS } from '../services/api';
 import SignalBadge from '../components/SignalBadge';
 import KPICard from '../components/KPICard';
 import {
@@ -52,11 +52,22 @@ export default function Monitoring() {
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [live, setLive] = useState(null);
   const [equityRange, setEquityRange] = useState('1D');
+  const [backendStatus, setBackendStatus] = useState('loading');
 
   useEffect(() => {
-    fetchMonitoring().then(setLive).catch(() => {});
-    // Refresh every 60 s
-    const id = setInterval(() => fetchMonitoring().then(setLive).catch(() => {}), 60_000);
+    const sync = () => {
+      fetchStatus()
+        .then((status) => {
+          setBackendStatus(status.status || 'loading');
+          if (status.status === 'ready') {
+            fetchMonitoring().then(setLive).catch(() => {});
+          }
+        })
+        .catch(() => setBackendStatus('error'));
+    };
+
+    sync();
+    const id = setInterval(sync, LIVE_POLL_MS);
     return () => clearInterval(id);
   }, []);
 
@@ -76,14 +87,25 @@ export default function Monitoring() {
     : intradayEquity.slice(-Math.min(2, intradayEquity.length));
   const equityXAxisInterval = equityData.length <= 8 ? 0 : equityData.length <= 24 ? 3 : 11;
 
+  const statusTone = backendStatus === 'ready'
+    ? 'text-profit'
+    : backendStatus === 'loading'
+      ? 'text-warning'
+      : 'text-loss';
+  const statusLabel = backendStatus === 'ready'
+    ? 'RUNNING'
+    : backendStatus === 'loading'
+      ? 'SYNCING'
+      : 'OFFLINE';
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-text-primary">Live Monitoring</h1>
-        {/* LIVE BADGE - indicates WebSocket/data feed connection is active
-            TODO: Wire to actual connection status */}
-        <span className="flex items-center gap-2 bg-profit/10 text-profit text-xs font-semibold px-3 py-1.5 rounded-full">
-          <Radio size={12} className="animate-pulse" /> LIVE
+        <span className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full ${
+          backendStatus === 'ready' ? 'bg-profit/10 text-profit' : backendStatus === 'loading' ? 'bg-warning/10 text-warning' : 'bg-loss/10 text-loss'
+        }`}>
+          <Radio size={12} className={backendStatus === 'ready' ? 'animate-pulse' : ''} /> {statusLabel}
         </span>
       </div>
 
@@ -97,9 +119,9 @@ export default function Monitoring() {
             - update_interval: {string} how often data refreshes (e.g., '2s')
           ================================================================ */}
       <div className="bg-bg-surface border border-border rounded-lg px-4 py-2.5 flex items-center gap-6 text-sm">
-        <span className="text-text-secondary">Strategy: <span className="text-profit font-semibold">RUNNING</span></span>
+        <span className="text-text-secondary">Strategy: <span className={`${statusTone} font-semibold`}>{statusLabel}</span></span>
         <span className="text-text-secondary">Regime: <span className="text-accent font-semibold">TRENDING</span></span>
-        <span className="text-text-secondary">Update: <span className="text-text-primary font-mono">2s</span></span>
+        <span className="text-text-secondary">Update: <span className="text-text-primary font-mono">{LIVE_POLL_MS / 1000}s</span></span>
       </div>
 
       {/* ================================================================
